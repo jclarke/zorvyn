@@ -1,0 +1,484 @@
+import type { Message } from './types';
+
+/** Visual kinds for the chat UI */
+export type TranscriptKind =
+  | 'user'
+  | 'assistant'
+  | 'thinking'
+  | 'tool'
+  | 'tool_result'
+  | 'status'
+  | 'error'
+  | 'meta'
+  | 'hidden';
+
+export type TranscriptPart = {
+  kind: TranscriptKind;
+  /** Primary display text */
+  text: string;
+  /** Secondary detail (tool args, paths, etc.) */
+  detail?: string;
+  /** Optional icon hint for the bubble */
+  icon?: 'person' | 'sparkles' | 'construct' | 'terminal' | 'alert' | 'time' | 'checkmark';
+  /** When true, bubble is visually de-emphasized */
+  muted?: boolean;
+  /** When true, content is collapsed by default (thinking) */
+  collapsible?: boolean;
+};
+
+export type ParsedMessage = {
+  id: string;
+  receivedAt: string;
+  sessionIndex: number;
+  /** Raw API type */
+  type: string;
+  /** Whether this row should render in the chat list */
+  visible: boolean;
+  parts: TranscriptPart[];
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return null;
+}
+
+function stringifyDetail(value: unknown, max = 400): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'string') {
+    return value.length > max ? `${value.slice(0, max)}…` : value;
+  }
+  try {
+    const s = JSON.stringify(value, null, 2);
+    return s.length > max ? `${s.slice(0, max)}…` : s;
+  } catch {
+    return String(value);
+  }
+}
+
+function summarizeToolInput(name: string, input: unknown): { text: string; detail?: string } {
+  const rec = asRecord(input) || {};
+  const n = name || 'tool';
+
+  // Common Claude Code / Conductor tool shapes
+  if (typeof rec.file_path === 'string') {
+    return { text: n, detail: rec.file_path };
+  }
+  if (typeof rec.path === 'string') {
+    return { text: n, detail: rec.path };
+  }
+  if (typeof rec.command === 'string') {
+    return { text: n, detail: rec.command };
+  }
+  if (typeof rec.pattern === 'string') {
+    const scope =
+      typeof rec.path === 'string'
+        ? rec.path
+        : typeof rec.glob === 'string'
+          ? rec.glob
+          : undefined;
+    return {
+      text: n,
+      detail: scope ? `${rec.pattern}  ·  ${scope}` : rec.pattern,
+    };
+  }
+  if (typeof rec.query === 'string') {
+    return { text: n, detail: rec.query };
+  }
+  if (typeof rec.url === 'string') {
+    return { text: n, detail: rec.url };
+  }
+  if (typeof rec.prompt === 'string') {
+    return {
+      text: n,
+      detail:
+        rec.prompt.length > 160 ? `${rec.prompt.slice(0, 160)}…` : rec.prompt,
+    };
+  }
+  if (typeof rec.description === 'string') {
+    return { text: n, detail: rec.description };
+  }
+  if (typeof rec.todos !== 'undefined') {
+    return { text: n, detail: 'update todos' };
+  }
+
+  const detail = stringifyDetail(input, 280);
+  return { text: n, detail: detail === '{}' || detail === 'null' ? undefined : detail };
+}
+
+function partsFromContentBlocks(blocks: unknown[]): TranscriptPart[] {
+  const parts: TranscriptPart[] = [];
+
+  for (const block of blocks) {
+    const b = asRecord(block);
+    if (!b) continue;
+    const type = String(b.type || '');
+
+    if (type === 'text' && typeof b.text === 'string' && b.text.trim()) {
+      parts.push({
+        kind: 'assistant',
+        text: b.text.trim(),
+        icon: 'sparkles',
+      });
+      continue;
+    }
+
+    if (type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim()) {
+      parts.push({
+        kind: 'thinking',
+        text: b.thinking.trim(),
+        muted: true,
+        collapsible: true,
+        icon: 'time',
+      });
+      continue;
+    }
+
+    if (type === 'tool_use' || type === 'server_tool_use') {
+      const name = typeof b.name === 'string' ? b.name : 'Tool';
+      const summary = summarizeToolInput(name, b.input);
+      parts.push({
+        kind: 'tool',
+        text: summary.text,
+        detail: summary.detail,
+        muted: true,
+        icon: name.toLowerCase() === 'bash' ? 'terminal' : 'construct',
+      });
+      continue;
+    }
+
+    if (type === 'tool_result') {
+      const content = b.content;
+      let text = 'Tool result';
+      if (typeof content === 'string') text = content;
+      else if (Array.isArray(content)) {
+        text = content
+          .map((c) => {
+            const r = asRecord(c);
+            if (r && typeof r.text === 'string') return r.text;
+            return stringifyDetail(c, 200) || '';
+          })
+          .filter(Boolean)
+          .join('\n');
+      } else if (content != null) {
+        text = stringifyDetail(content, 400) || 'Tool result';
+      }
+      const isError = b.is_error === true;
+      parts.push({
+        kind: isError ? 'error' : 'tool_result',
+        text: text.trim() || (isError ? 'Tool failed' : 'Tool finished'),
+        muted: !isError,
+        icon: isError ? 'alert' : 'checkmark',
+      });
+      continue;
+    }
+
+    if (type === 'image') {
+      parts.push({
+        kind: 'meta',
+        text: 'Image attachment',
+        muted: true,
+      });
+      continue;
+    }
+
+    // Unknown block — show a short label, not raw JSON
+    if (type) {
+      parts.push({
+        kind: 'meta',
+        text: type.replace(/_/g, ' '),
+        detail: stringifyDetail(b, 200),
+        muted: true,
+      });
+    }
+  }
+
+  return parts;
+}
+
+function parseAgentPayload(raw: unknown): TranscriptPart[] {
+  const payload = asRecord(raw);
+  if (!payload) {
+    return [
+      {
+        kind: 'meta',
+        text: stringifyDetail(raw, 300) || 'Event',
+        muted: true,
+      },
+    ];
+  }
+
+  // Some result events omit type but have result + is_error
+  const type =
+    typeof payload.type === 'string'
+      ? payload.type
+      : payload.result != null
+        ? 'result'
+        : '';
+
+  // —— Lifecycle / system noise ——
+  if (type === 'command_lifecycle') {
+    return [{ kind: 'hidden', text: '' }];
+  }
+
+  if (type === 'system') {
+    const subtype = String(payload.subtype || '');
+    if (subtype === 'session_state_changed') {
+      return [{ kind: 'hidden', text: '' }];
+    }
+    if (subtype === 'init') {
+      const model = typeof payload.model === 'string' ? payload.model : undefined;
+      const cwd = typeof payload.cwd === 'string' ? payload.cwd : undefined;
+      return [
+        {
+          kind: 'status',
+          text: model ? `Session ready · ${model}` : 'Session ready',
+          detail: cwd,
+          muted: true,
+          icon: 'checkmark',
+        },
+      ];
+    }
+    return [
+      {
+        kind: 'status',
+        text: subtype ? subtype.replace(/_/g, ' ') : 'System',
+        muted: true,
+      },
+    ];
+  }
+
+  if (type === 'rate_limit_event') {
+    const info = asRecord(payload.rate_limit_info);
+    const status = info && typeof info.status === 'string' ? info.status : '';
+    if (status === 'allowed') {
+      return [{ kind: 'hidden', text: '' }];
+    }
+    return [
+      {
+        kind: 'status',
+        text: status ? `Rate limit: ${status}` : 'Rate limit event',
+        muted: true,
+        icon: 'alert',
+      },
+    ];
+  }
+
+  if (type === 'assistant') {
+    const message = asRecord(payload.message);
+    const content = message?.content;
+    if (Array.isArray(content)) {
+      const parts = partsFromContentBlocks(content);
+      if (parts.length) return parts;
+    }
+    if (message && typeof message.content === 'string') {
+      return [{ kind: 'assistant', text: message.content, icon: 'sparkles' }];
+    }
+    return [{ kind: 'hidden', text: '' }];
+  }
+
+  if (type === 'user') {
+    // Tool results sometimes arrive as user events in agent streams
+    const message = asRecord(payload.message);
+    const content = message?.content ?? payload.content;
+    if (Array.isArray(content)) {
+      return partsFromContentBlocks(content);
+    }
+    if (typeof content === 'string' && content.trim()) {
+      return [{ kind: 'tool_result', text: content.trim(), muted: true }];
+    }
+    return [{ kind: 'hidden', text: '' }];
+  }
+
+  if (type === 'result') {
+    // Final turn summary — prefer not to duplicate assistant text.
+    // Show only errors or a compact cost line when useful.
+    if (payload.is_error === true) {
+      const result =
+        typeof payload.result === 'string'
+          ? payload.result
+          : 'Agent finished with an error';
+      return [
+        {
+          kind: 'error',
+          text: result,
+          icon: 'alert',
+        },
+      ];
+    }
+    // Successful result duplicates assistant text — hide.
+    return [{ kind: 'hidden', text: '' }];
+  }
+
+  if (type === 'error' || payload.is_error === true) {
+    const msg =
+      (typeof payload.error === 'string' && payload.error) ||
+      (typeof payload.result === 'string' && payload.result) ||
+      (typeof payload.message === 'string' && payload.message) ||
+      'Agent error';
+    return [{ kind: 'error', text: msg, icon: 'alert' }];
+  }
+
+  // Stream deltas / unknown — hide empty noise
+  if (type === 'stream_event' || type === 'content_block_delta') {
+    return [{ kind: 'hidden', text: '' }];
+  }
+
+  if (typeof payload.message === 'string' && payload.message.trim()) {
+    return [{ kind: 'assistant', text: payload.message.trim(), icon: 'sparkles' }];
+  }
+
+  if (type) {
+    return [
+      {
+        kind: 'meta',
+        text: type.replace(/_/g, ' '),
+        detail: stringifyDetail(payload, 200),
+        muted: true,
+      },
+    ];
+  }
+
+  return [{ kind: 'hidden', text: '' }];
+}
+
+/** Parse a single API transcript message into UI parts. */
+export function parseTranscriptMessage(message: Message): ParsedMessage {
+  const content = message.content;
+  const base = {
+    id: message.id,
+    receivedAt: message.receivedAt,
+    sessionIndex: message.sessionIndex,
+    type: message.type,
+  };
+
+  // Plain string
+  if (typeof content === 'string') {
+    const text = content.trim();
+    return {
+      ...base,
+      visible: !!text,
+      parts: text
+        ? [
+            {
+              kind: isUserType(message.type) ? 'user' : 'assistant',
+              text,
+              icon: isUserType(message.type) ? 'person' : 'sparkles',
+            },
+          ]
+        : [],
+    };
+  }
+
+  const obj = asRecord(content);
+  if (!obj) {
+    return { ...base, visible: false, parts: [] };
+  }
+
+  // User prompt events
+  if (
+    message.type === 'userMessage' ||
+    obj.type === 'userMessage' ||
+    isUserType(message.type)
+  ) {
+    const text =
+      (typeof obj.message === 'string' && obj.message) ||
+      (typeof obj.text === 'string' && obj.text) ||
+      '';
+    if (text.trim()) {
+      return {
+        ...base,
+        visible: true,
+        parts: [
+          {
+            kind: 'user',
+            text: text.trim(),
+            icon: 'person',
+          },
+        ],
+      };
+    }
+  }
+
+  // Agent envelope: { type: 'agent', rawPayload: {...} }
+  if (obj.type === 'agent' || message.type === 'agent' || obj.rawPayload) {
+    const parts = parseAgentPayload(obj.rawPayload ?? obj);
+    const visibleParts = parts.filter((p) => p.kind !== 'hidden' && p.text);
+    return {
+      ...base,
+      visible: visibleParts.length > 0,
+      parts: visibleParts,
+    };
+  }
+
+  // Direct nested shapes
+  if (obj.rawPayload) {
+    const parts = parseAgentPayload(obj.rawPayload);
+    const visibleParts = parts.filter((p) => p.kind !== 'hidden' && p.text);
+    return {
+      ...base,
+      visible: visibleParts.length > 0,
+      parts: visibleParts,
+    };
+  }
+
+  if (typeof obj.message === 'string' && obj.message.trim()) {
+    return {
+      ...base,
+      visible: true,
+      parts: [
+        {
+          kind: isUserType(message.type) ? 'user' : 'assistant',
+          text: obj.message.trim(),
+          icon: isUserType(message.type) ? 'person' : 'sparkles',
+        },
+      ],
+    };
+  }
+
+  if (Array.isArray(obj.content)) {
+    const parts = partsFromContentBlocks(obj.content).filter(
+      (p) => p.kind !== 'hidden' && p.text,
+    );
+    return { ...base, visible: parts.length > 0, parts };
+  }
+
+  return { ...base, visible: false, parts: [] };
+}
+
+function isUserType(type: string): boolean {
+  const t = type.toLowerCase();
+  return t.includes('user') || t === 'human' || t === 'prompt' || t === 'input';
+}
+
+/** Filter + parse a list of API messages for the chat list. */
+export function parseTranscript(messages: Message[]): ParsedMessage[] {
+  return messages
+    .map(parseTranscriptMessage)
+    .filter((m) => m.visible && m.parts.length > 0);
+}
+
+/** Human label for a part kind */
+export function partLabel(kind: TranscriptKind): string {
+  switch (kind) {
+    case 'user':
+      return 'You';
+    case 'assistant':
+      return 'Agent';
+    case 'thinking':
+      return 'Thinking';
+    case 'tool':
+      return 'Tool';
+    case 'tool_result':
+      return 'Result';
+    case 'status':
+      return 'Status';
+    case 'error':
+      return 'Error';
+    case 'meta':
+      return 'Info';
+    default:
+      return '';
+  }
+}

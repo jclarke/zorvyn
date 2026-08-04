@@ -1,0 +1,69 @@
+{
+  "buildCommand": "npx expo export --platform web",
+  "outputDirectory": "dist",
+  "installCommand": "npm install",
+  "framework": null,
+  "redirects": [
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "zorvyn-eta.vercel.app" }],
+      "destination": "https://conduct.jclarke.xyz/",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "zorvyn-eta.vercel.app" }],
+      "destination": "https://conduct.jclarke.xyz/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/",
+      "has": [{ "type": "host", "value": "zorvyn.vercel.app" }],
+      "destination": "https://conduct.jclarke.xyz/",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [{ "type": "host", "value": "zorvyn.vercel.app" }],
+      "destination": "https://conduct.jclarke.xyz/:path*",
+      "permanent": true
+    },
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "(?<sub>.+)\\.vercel\\.app"
+        }
+      ],
+      "destination": "https://conduct.jclarke.xyz/",
+      "permanent": true
+    },
+    {
+      "source": "/:path*",
+      "has": [
+        {
+          "type": "host",
+          "value": "(?<sub>.+)\\.vercel\\.app"
+        }
+      ],
+      "destination": "https://conduct.jclarke.xyz/:path*",
+      "permanent": true
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/((?!_expo/|assets/|favicon|.*\\..*).*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+      ]
+    }
+  ]
+}
