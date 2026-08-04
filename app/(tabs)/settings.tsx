@@ -29,8 +29,10 @@ import { colors, spacing } from '@/lib/theme';
 
 const KEYS_URL = 'https://app.conductor.build/users/api-keys';
 const DOCS_URL = 'https://www.conductor.build/docs/api';
+// Classic PAT form with required scopes pre-checked (repo covers private PR/file reads).
+// https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
 const GITHUB_TOKEN_URL =
-  'https://github.com/settings/personal-access-tokens/new?name=Zorvyn&description=Read+pull+request+files+in+Zorvyn&contents=read&pull_requests=read';
+  'https://github.com/settings/tokens/new?description=Zorvyn%20%E2%80%94%20read%20PR%20files%20for%20Conductor%20workspaces&scopes=repo';
 
 export default function SettingsScreen() {
   const { me, apiKey, signOut, refreshMe } = useAuth();
@@ -221,20 +223,21 @@ export default function SettingsScreen() {
         <Card style={styles.card}>
           <Body muted>
             Used on the workspace Changes screen to list pull request files for
-            private org repositories. Fine-grained PATs must explicitly include
-            each repository; GitHub returns “Not Found” if the token cannot see
-            the repo.
+            private repositories across your orgs. A classic PAT with the{' '}
+            <Text style={styles.mono}>repo</Text> scope works for every org you
+            can access (authorize SAML SSO per org if prompted).
           </Body>
           <Button
-            title="Create GitHub token"
+            title="Create classic PAT"
             variant="secondary"
             icon="open-outline"
             onPress={() => Linking.openURL(GITHUB_TOKEN_URL)}
           />
           <Caption>
-            Grant Contents + Pull requests (read) on the repos you use in
-            Conductor. If the org uses SAML SSO, open the token on GitHub and
-            authorize that organization.
+            Opens GitHub’s classic token form with{' '}
+            <Text style={styles.mono}>repo</Text> pre-checked. Generate, copy
+            the <Text style={styles.mono}>ghp_…</Text> token, paste below. If an
+            org uses SAML SSO: token → Configure SSO → Authorize.
           </Caption>
           <InfoRow
             label="Status"
@@ -245,9 +248,7 @@ export default function SettingsScreen() {
           <Input
             label="Personal access token"
             placeholder={
-              hasGithubToken
-                ? 'Enter a new token to replace'
-                : 'github_pat_… or ghp_…'
+              hasGithubToken ? 'Enter a new token to replace' : 'ghp_…'
             }
             value={githubToken}
             onChangeText={setGithubToken}
