@@ -236,17 +236,33 @@ function titleLikelyMatch(workspaceHint: string, prTitle: string): boolean {
   return hit / at.size >= 0.6;
 }
 
+function looksLikeGitBranch(ref: string): boolean {
+  const b = ref.trim();
+  return (
+    !!b &&
+    !/\s/.test(b) &&
+    b.length >= 2 &&
+    b.length < 200 &&
+    !b.includes('://') &&
+    /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(b)
+  );
+}
+
 /**
- * Find PRs for a workspace:
- * 1) explicit head branch match (if branch looks like a git ref)
- * 2) open PRs whose title matches the workspace name
- * 3) search API on title/body
- * 4) recently updated PRs (fallback list)
+ * Find PRs for a workspace. Prefer precise signals only — never dump every open PR.
+ *
+ * Priority:
+ * 1) linked PR numbers (from chat / SQL transcript URLs)
+ * 2) exact head branch match (transcript branch candidates, then route param)
+ * 3) open PRs whose title / head ref matches the workspace name
+ * 4) GitHub search on workspace name keywords
  */
 export async function findPullsForWorkspace(
   repo: GithubRepo,
   options: {
     branch?: string | null;
+    /** Extra head refs from transcripts (e.g. Conductor city-name branches). */
+    branchCandidates?: string[] | null;
     workspaceName?: string | null;
     linkedPullNumbers?: number[];
     token: string | null;
@@ -260,7 +276,7 @@ export async function findPullsForWorkspace(
     if (!found.has(p.number)) found.set(p.number, p);
   };
 
-  // 0) Linked PR numbers from transcripts
+  // 0) Linked PR numbers from transcripts / chat — most reliable
   for (const n of options.linkedPullNumbers || []) {
     try {
       const p = await githubFetch<GhPullRaw>(
@@ -274,17 +290,23 @@ export async function findPullsForWorkspace(
   }
   if (found.size) return Array.from(found.values());
 
-  const branch = (options.branch || '').trim();
   const workspaceName = (options.workspaceName || '').trim();
-  // Only use as git head ref if it looks like a branch (no spaces preferred; allow slash/underscore)
-  const branchLooksValid =
-    !!branch &&
-    !/\s/.test(branch) &&
-    branch.length < 200 &&
-    !branch.includes('://');
+  const candidateBranches: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [
+    ...(options.branchCandidates || []),
+    options.branch || '',
+  ]) {
+    const b = (raw || '').trim();
+    if (!looksLikeGitBranch(b)) continue;
+    const key = b.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    candidateBranches.push(b);
+  }
 
-  // 1) Exact head branch
-  if (branchLooksValid) {
+  // 1) Exact head branch for each candidate
+  for (const branch of candidateBranches) {
     const head = encodeURIComponent(`${repo.owner}:${branch}`);
     for (const state of ['open', 'all'] as const) {
       try {
@@ -300,18 +322,22 @@ export async function findPullsForWorkspace(
     }
   }
 
-  // 2) Scan open PRs for title / head match
-  const hint = workspaceName || branch;
+  // 2) Scan open PRs for title / head match (workspace display name ≠ branch)
+  const hint = workspaceName || candidateBranches[0] || '';
   try {
     const open = await githubFetch<GhPullRaw[]>(
       `/repos/${repo.owner}/${repo.repo}/pulls?state=open&sort=updated&per_page=30`,
       token,
     );
+    const branchSet = new Set(candidateBranches.map((b) => b.toLowerCase()));
     for (const p of open) {
+      const headRef = p.head?.ref || '';
       if (
         (hint && titleLikelyMatch(hint, p.title)) ||
-        (branch && p.head?.ref === branch) ||
-        (workspaceName && p.head?.ref && titleLikelyMatch(workspaceName, p.head.ref))
+        (headRef && branchSet.has(headRef.toLowerCase())) ||
+        (workspaceName &&
+          headRef &&
+          titleLikelyMatch(workspaceName, headRef))
       ) {
         remember(mapPull(p));
       }
@@ -343,23 +369,12 @@ export async function findPullsForWorkspace(
           // ignore
         }
       }
-      if (found.size) return Array.from(found.values());
     } catch {
       // continue
     }
   }
 
-  // 4) Fallback: show recent open PRs so the user can pick one
-  try {
-    const open = await githubFetch<GhPullRaw[]>(
-      `/repos/${repo.owner}/${repo.repo}/pulls?state=open&sort=updated&per_page=10`,
-      token,
-    );
-    for (const p of open) remember(mapPull(p));
-  } catch {
-    // ignore
-  }
-
+  // No "list every open PR" fallback — that was flooding Changes with unrelated PRs.
   return Array.from(found.values());
 }
 

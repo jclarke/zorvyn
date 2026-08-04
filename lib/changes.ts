@@ -23,12 +23,6 @@ export type LinkedPull = {
   label: string;
 };
 
-export type LinkedIssue = {
-  url: string;
-  label: string;
-  source: 'linear' | 'github' | 'other';
-};
-
 const WRITE_TOOLS = new Set([
   'write',
   'create',
@@ -168,10 +162,6 @@ const PR_URL_RE =
   /https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/gi;
 const COMPARE_URL_RE =
   /https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/compare\/[^\s)\]>`"']+/gi;
-const LINEAR_URL_RE =
-  /https?:\/\/(?:linear\.app|linear\.dev)\/[^\s)\]>`"']+/gi;
-const GH_ISSUE_RE =
-  /https?:\/\/(?:www\.)?github\.com\/([\w.-]+)\/([\w.-]+)\/issues\/(\d+)/gi;
 
 function textFromMessage(message: Message): string {
   const c = message.content;
@@ -186,12 +176,11 @@ function textFromMessage(message: Message): string {
   }
 }
 
+/** Extract GitHub PR / compare links from chat messages (not issues). */
 export function extractLinkedResources(messages: Message[]): {
   pulls: LinkedPull[];
-  issues: LinkedIssue[];
 } {
   const pullMap = new Map<string, LinkedPull>();
-  const issueMap = new Map<string, LinkedIssue>();
 
   for (const m of messages) {
     const text = textFromMessage(m);
@@ -212,29 +201,145 @@ export function extractLinkedResources(messages: Message[]): {
         pullMap.set(url, { url, label: 'Compare on GitHub' });
       }
     }
-
-    for (const match of text.matchAll(LINEAR_URL_RE)) {
-      const url = match[0].replace(/[.,;:]+$/, '');
-      issueMap.set(url, {
-        url,
-        label: 'Linear issue',
-        source: 'linear',
-      });
-    }
-
-    for (const match of text.matchAll(GH_ISSUE_RE)) {
-      const url = match[0];
-      issueMap.set(url, {
-        url,
-        label: `Issue #${match[3]}`,
-        source: 'github',
-      });
-    }
   }
 
   return {
     pulls: Array.from(pullMap.values()),
-    issues: Array.from(issueMap.values()),
+  };
+}
+
+/** Hints scraped from chat/SQL transcript text for PR matching. */
+export type GitHints = {
+  pullNumbers: number[];
+  /** Likely git head refs (city names, feature branches, etc.) */
+  branches: string[];
+  repoUrls: string[];
+};
+
+const BRANCH_CONTEXT_RES: RegExp[] = [
+  // On branch foo / Current branch: foo / Switched to branch 'foo'
+  /(?:on branch|current branch|switched to (?:a )?branch|checked out branch)\s+[`'"]?([A-Za-z0-9][A-Za-z0-9._/-]{1,120})/gi,
+  // git checkout -b foo / git switch -c foo / git push -u origin foo
+  /git\s+(?:checkout|switch)(?:\s+-b|\s+-c)?\s+[`'"]?([A-Za-z0-9][A-Za-z0-9._/-]{1,120})/gi,
+  /git\s+push(?:\s+-[uU])?\s+origin\s+[`'"]?([A-Za-z0-9][A-Za-z0-9._/-]{1,120})/gi,
+  // gh pr create --head foo / --base main
+  /--head\s+[`'"]?([A-Za-z0-9][A-Za-z0-9._/-]{1,120})/gi,
+  // github.com/org/repo/tree/branch
+  /github\.com\/[\w.-]+\/[\w.-]+\/tree\/([A-Za-z0-9][A-Za-z0-9._/-]{1,120})/gi,
+  // compare/base...head or compare/base...owner:head
+  /github\.com\/[\w.-]+\/[\w.-]+\/compare\/[^\s)\]>`"']*?\.\.\.(?:[\w.-]+:)?([A-Za-z0-9][A-Za-z0-9._/-]{1,120})/gi,
+  // branch `foo` / branch "foo"
+  /\bbranch\s+[`'"]([A-Za-z0-9][A-Za-z0-9._/-]{1,120})[`'"]/gi,
+];
+
+const REPO_URL_RE =
+  /(?:https?:\/\/github\.com\/[\w.-]+\/[\w.-]+(?:\.git)?|git@github\.com:[\w.-]+\/[\w.-]+(?:\.git)?)/gi;
+
+const NOISE_BRANCHES = new Set([
+  'main',
+  'master',
+  'develop',
+  'development',
+  'staging',
+  'production',
+  'prod',
+  'release',
+  'trunk',
+  'head',
+  'origin',
+  'upstream',
+  'refs',
+  'heads',
+  'remotes',
+  'true',
+  'false',
+  'null',
+  'undefined',
+  'branch',
+  'feature',
+  'fix',
+  'hotfix',
+  'chore',
+  'docs',
+  'test',
+  'tests',
+  'dev',
+  'latest',
+  'stable',
+]);
+
+function isPlausibleBranch(ref: string): boolean {
+  const b = ref.trim().replace(/^origin\//, '').replace(/^heads\//, '');
+  if (!b || b.length < 2 || b.length > 120) return false;
+  if (/\s/.test(b) || b.includes('://')) return false;
+  if (NOISE_BRANCHES.has(b.toLowerCase())) return false;
+  // Avoid common path-ish noise
+  if (b.includes('.') && (b.endsWith('.ts') || b.endsWith('.js') || b.endsWith('.md') || b.endsWith('.json'))) {
+    return false;
+  }
+  // Prefer refs that look like Conductor city names or feature branches
+  return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(b);
+}
+
+/**
+ * Extract PR numbers, likely branch names, and repo URLs from plain transcript text.
+ * Conductor workspace GET does not expose branch — only SQL/transcripts do.
+ */
+export function extractGitHintsFromText(...texts: (string | null | undefined)[]): GitHints {
+  const pullNumbers = new Set<number>();
+  const branches: string[] = [];
+  const seenBranch = new Set<string>();
+  const repoUrls = new Set<string>();
+
+  const rememberBranch = (raw: string) => {
+    const b = raw.trim().replace(/^origin\//, '').replace(/^heads\//, '');
+    if (!isPlausibleBranch(b)) return;
+    const key = b.toLowerCase();
+    if (seenBranch.has(key)) return;
+    seenBranch.add(key);
+    branches.push(b);
+  };
+
+  for (const text of texts) {
+    if (!text || typeof text !== 'string') continue;
+
+    for (const match of text.matchAll(PR_URL_RE)) {
+      const n = Number(match[3]);
+      if (Number.isFinite(n) && n > 0) pullNumbers.add(n);
+    }
+
+    for (const re of BRANCH_CONTEXT_RES) {
+      re.lastIndex = 0;
+      for (const match of text.matchAll(re)) {
+        if (match[1]) rememberBranch(match[1]);
+      }
+    }
+
+    for (const match of text.matchAll(REPO_URL_RE)) {
+      repoUrls.add(match[0].replace(/[.,;:]+$/, ''));
+    }
+  }
+
+  return {
+    pullNumbers: Array.from(pullNumbers),
+    branches,
+    repoUrls: Array.from(repoUrls),
+  };
+}
+
+/** Merge hints from messages + free-text transcripts. */
+export function extractGitHintsFromMessages(messages: Message[]): GitHints {
+  const texts = messages.map(textFromMessage);
+  const fromText = extractGitHintsFromText(...texts);
+  const links = extractLinkedResources(messages);
+  const pullNumbers = new Set(fromText.pullNumbers);
+  for (const p of links.pulls) {
+    if (typeof p.number === 'number') pullNumbers.add(p.number);
+  }
+  return {
+    pullNumbers: Array.from(pullNumbers),
+    branches: fromText.branches,
+    repoUrls: fromText.repoUrls,
   };
 }
 

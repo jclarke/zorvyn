@@ -30,11 +30,12 @@ import {
   basename,
   dirname,
   extractFileChanges,
+  extractGitHintsFromMessages,
+  extractGitHintsFromText,
   extractLinkedResources,
   fileActionColor,
   fileActionLabel,
   type FileChange,
-  type LinkedIssue,
   type LinkedPull,
 } from '@/lib/changes';
 import {
@@ -66,7 +67,8 @@ export default function WorkspaceChangesScreen() {
   const client = useClient();
   const router = useRouter();
 
-  const branch = (branchParam || name || '').trim();
+  // Route "branch" is usually the workspace display name (not a git ref).
+  const routeHint = (branchParam || name || '').trim();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -74,8 +76,8 @@ export default function WorkspaceChangesScreen() {
 
   const [agentFiles, setAgentFiles] = useState<FileChange[]>([]);
   const [linkedPulls, setLinkedPulls] = useState<LinkedPull[]>([]);
-  const [linkedIssues, setLinkedIssues] = useState<LinkedIssue[]>([]);
   const [repoUrl, setRepoUrl] = useState<string | null>(null);
+  const [resolvedBranch, setResolvedBranch] = useState<string | null>(null);
 
   const [githubToken, setGithubToken] = useState<string | null>(null);
   const [githubRepo, setGithubRepo] = useState<GithubRepo | null>(null);
@@ -87,10 +89,11 @@ export default function WorkspaceChangesScreen() {
 
   const loadAgentActivity = useCallback(async (): Promise<{
     repoUrl: string | null;
-    linkedPulls: LinkedPull[];
+    linkedPullNumbers: number[];
+    branchCandidates: string[];
   }> => {
     if (!client || !workspaceId) {
-      return { repoUrl: null, linkedPulls: [] };
+      return { repoUrl: null, linkedPullNumbers: [], branchCandidates: [] };
     }
 
     const sessions = await client.listWorkspaceSessions(workspaceId, {
@@ -112,31 +115,61 @@ export default function WorkspaceChangesScreen() {
     setAgentFiles(extractFileChanges(allMessages));
     const links = extractLinkedResources(allMessages);
     setLinkedPulls(links.pulls);
-    setLinkedIssues(links.issues);
+
+    const messageHints = extractGitHintsFromMessages(allMessages);
 
     let foundRepo: string | null = null;
-    // Prefer repo_url from SQL when available
+    let sqlTranscripts: string[] = [];
+    // Workspace GET has no branch/remote — SQL view has repo_url + transcript text.
     try {
       const sql = await client.runSql({
-        query: `SELECT repo_url FROM session_transcripts_view WHERE workspace_id = '${workspaceId.replace(/'/g, "''")}' AND repo_url IS NOT NULL LIMIT 1`,
+        query: `SELECT repo_url, transcript FROM session_transcripts_view WHERE workspace_id = '${workspaceId.replace(/'/g, "''")}' ORDER BY transcript_updated_at DESC NULLS LAST LIMIT 20`,
       });
-      const row = sql.rows[0];
-      if (row && typeof row.repo_url === 'string') {
-        foundRepo = row.repo_url;
-        setRepoUrl(row.repo_url);
+      for (const row of sql.rows) {
+        if (!foundRepo && typeof row.repo_url === 'string' && row.repo_url) {
+          foundRepo = row.repo_url;
+        }
+        if (typeof row.transcript === 'string' && row.transcript) {
+          sqlTranscripts.push(row.transcript);
+        }
       }
+      if (foundRepo) setRepoUrl(foundRepo);
     } catch {
       // SQL may be unavailable; continue without
     }
 
-    return { repoUrl: foundRepo, linkedPulls: links.pulls };
+    const sqlHints = extractGitHintsFromText(...sqlTranscripts);
+    if (!foundRepo && sqlHints.repoUrls[0]) {
+      foundRepo = sqlHints.repoUrls[0];
+      setRepoUrl(foundRepo);
+    }
+    if (!foundRepo && messageHints.repoUrls[0]) {
+      foundRepo = messageHints.repoUrls[0];
+      setRepoUrl(foundRepo);
+    }
+
+    const pullNumbers = Array.from(
+      new Set([...messageHints.pullNumbers, ...sqlHints.pullNumbers]),
+    );
+    const branchCandidates = Array.from(
+      new Set([...sqlHints.branches, ...messageHints.branches]),
+    );
+    if (branchCandidates[0]) setResolvedBranch(branchCandidates[0]);
+    else setResolvedBranch(null);
+
+    return {
+      repoUrl: foundRepo,
+      linkedPullNumbers: pullNumbers,
+      branchCandidates,
+    };
   }, [client, workspaceId]);
 
   const loadGithub = useCallback(
     async (
       remote: string | null,
       token: string | null,
-      pullsFromTranscript: LinkedPull[],
+      linkedPullNumbers: number[],
+      branchCandidates: string[],
     ) => {
       const repo = parseGithubRemote(remote);
       setGithubRepo(repo);
@@ -158,28 +191,32 @@ export default function WorkspaceChangesScreen() {
         return;
       }
 
-      const linkedPullNumbers = pullsFromTranscript
-        .map((p) => p.number)
-        .filter((n): n is number => typeof n === 'number');
-
       setGithubLoading(true);
       try {
-        // Workspace names often aren't git branch names (e.g. "Audit SMS notifications").
-        // Match by linked PR URLs, title similarity, head ref, then recent open PRs.
+        // Prefer PR URLs + real git branch from transcripts. Workspace display
+        // name (e.g. "Audit SMS notifications") is usually NOT the git branch.
+        const routeBranch =
+          routeHint && !routeHint.includes(' ') ? routeHint : undefined;
         const pulls = await findPullsForWorkspace(repo, {
-          branch: branch.includes(' ') ? undefined : branch || undefined,
-          workspaceName: name || branch || undefined,
+          branch: routeBranch,
+          branchCandidates,
+          workspaceName: name || routeHint || undefined,
           linkedPullNumbers,
           token,
         });
         setGithubPulls(pulls);
         if (pulls[0]) {
           setSelectedPull(pulls[0]);
+          if (pulls[0].headRef) setResolvedBranch(pulls[0].headRef);
           const files = await listPullFiles(repo, pulls[0].number, token);
           setGithubFiles(files);
         } else {
           setGithubError(
-            `No pull requests matched this workspace in ${repo.owner}/${repo.repo}. Open PRs on GitHub or link a PR URL in chat.`,
+            `No pull request matched this workspace in ${repo.owner}/${repo.repo}. ` +
+              (branchCandidates.length
+                ? `Tried branch${branchCandidates.length > 1 ? 'es' : ''}: ${branchCandidates.slice(0, 3).join(', ')}. `
+                : '') +
+              'Open a PR, mention its URL in chat, or ensure the agent has checked out the branch.',
           );
         }
       } catch (e) {
@@ -190,7 +227,7 @@ export default function WorkspaceChangesScreen() {
         setGithubLoading(false);
       }
     },
-    [branch, name],
+    [routeHint, name],
   );
 
   const load = useCallback(
@@ -205,7 +242,12 @@ export default function WorkspaceChangesScreen() {
         setGithubToken(token);
 
         const activity = await loadAgentActivity();
-        await loadGithub(activity.repoUrl, token, activity.linkedPulls);
+        await loadGithub(
+          activity.repoUrl,
+          token,
+          activity.linkedPullNumbers,
+          activity.branchCandidates,
+        );
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load changes');
       } finally {
@@ -286,8 +328,9 @@ export default function WorkspaceChangesScreen() {
             <Body muted>
               Changes for{' '}
               <Text style={{ color: colors.accent, fontWeight: '600' }}>
-                {name || branch || 'workspace'}
+                {name || routeHint || 'workspace'}
               </Text>
+              {resolvedBranch ? ` · ${resolvedBranch}` : ''}
               {githubRepo
                 ? ` · ${githubRepo.owner}/${githubRepo.repo}`
                 : repoUrl
@@ -350,18 +393,6 @@ export default function WorkspaceChangesScreen() {
                     icon="git-pull-request"
                     label={p.label}
                     onPress={() => Linking.openURL(p.url)}
-                  />
-                ))}
-                {linkedIssues.map((issue) => (
-                  <LinkChip
-                    key={issue.url}
-                    icon={
-                      issue.source === 'linear'
-                        ? 'albums-outline'
-                        : 'bookmark-outline'
-                    }
-                    label={issue.label}
-                    onPress={() => Linking.openURL(issue.url)}
                   />
                 ))}
                 {!githubToken ? (
