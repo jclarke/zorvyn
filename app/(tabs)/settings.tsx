@@ -221,9 +221,9 @@ export default function SettingsScreen() {
         <Card style={styles.card}>
           <Body muted>
             Used on the workspace Changes screen to list pull request files for
-            private org repos (e.g. ez-home-search/…). Fine-grained PATs must
-            explicitly include each repository; GitHub returns “Not Found” if
-            the token cannot see the repo.
+            private org repositories. Fine-grained PATs must explicitly include
+            each repository; GitHub returns “Not Found” if the token cannot see
+            the repo.
           </Body>
           <Button
             title="Create GitHub token"
