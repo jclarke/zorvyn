@@ -197,6 +197,258 @@ function partsFromContentBlocks(blocks: unknown[]): TranscriptPart[] {
   return parts;
 }
 
+/**
+ * Codex / OpenAI Responses-style agent stream (gpt-5.x-sol, etc.):
+ * rawPayload: { event: { type: 'item.completed', item: { type: 'agentMessage', text } }, thread_id }
+ * Claude-style uses rawPayload.type === 'assistant' | 'user' | … instead.
+ */
+function textFromCodexContent(content: unknown): string {
+  if (typeof content === 'string') return content.trim();
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((block) => {
+      const b = asRecord(block);
+      if (!b) return '';
+      if (typeof b.text === 'string') return b.text;
+      if (typeof b.output_text === 'string') return b.output_text;
+      return '';
+    })
+    .filter(Boolean)
+    .join('\n')
+    .trim();
+}
+
+function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
+  const itemType = String(item.type || '');
+
+  if (itemType === 'agentMessage' || itemType === 'message' || itemType === 'assistantMessage') {
+    const text =
+      (typeof item.text === 'string' && item.text.trim()) ||
+      textFromCodexContent(item.content);
+    if (!text) return [{ kind: 'hidden', text: '' }];
+    return [{ kind: 'assistant', text, icon: 'sparkles' }];
+  }
+
+  // Echo of the user prompt inside the agent stream — API already has userMessage
+  if (itemType === 'userMessage') {
+    return [{ kind: 'hidden', text: '' }];
+  }
+
+  if (itemType === 'reasoning' || itemType === 'thinking') {
+    const summary = item.summary;
+    let text = '';
+    if (typeof summary === 'string') text = summary.trim();
+    else if (Array.isArray(summary)) {
+      text = summary
+        .map((s) => {
+          if (typeof s === 'string') return s;
+          const r = asRecord(s);
+          return (r && (typeof r.text === 'string' ? r.text : typeof r.summary === 'string' ? r.summary : '')) || '';
+        })
+        .filter(Boolean)
+        .join('\n')
+        .trim();
+    }
+    if (!text) text = textFromCodexContent(item.content);
+    if (!text && typeof item.text === 'string') text = item.text.trim();
+    if (!text) return [{ kind: 'hidden', text: '' }];
+    return [
+      {
+        kind: 'thinking',
+        text,
+        muted: true,
+        collapsible: true,
+        icon: 'time',
+      },
+    ];
+  }
+
+  if (
+    itemType === 'commandExecution' ||
+    itemType === 'command' ||
+    itemType === 'bash' ||
+    itemType === 'shell'
+  ) {
+    const command =
+      (typeof item.command === 'string' && item.command) ||
+      (typeof item.cmd === 'string' && item.cmd) ||
+      '';
+    const output =
+      (typeof item.aggregatedOutput === 'string' && item.aggregatedOutput) ||
+      (typeof item.output === 'string' && item.output) ||
+      (typeof item.stdout === 'string' && item.stdout) ||
+      '';
+    const status = typeof item.status === 'string' ? item.status : '';
+    const parts: TranscriptPart[] = [];
+    if (command) {
+      parts.push({
+        kind: 'tool',
+        text: 'bash',
+        detail: command,
+        muted: true,
+        icon: 'terminal',
+      });
+    }
+    if (output.trim()) {
+      const failed = status === 'failed' || status === 'error';
+      parts.push({
+        kind: failed ? 'error' : 'tool_result',
+        text: output.trim().length > 2000 ? `${output.trim().slice(0, 2000)}…` : output.trim(),
+        muted: !failed,
+        icon: failed ? 'alert' : 'checkmark',
+      });
+    }
+    if (!parts.length && status) {
+      parts.push({
+        kind: 'tool',
+        text: `command ${status}`,
+        muted: true,
+        icon: 'terminal',
+      });
+    }
+    return parts.length ? parts : [{ kind: 'hidden', text: '' }];
+  }
+
+  if (
+    itemType === 'fileChange' ||
+    itemType === 'file_change' ||
+    itemType === 'applyPatch' ||
+    itemType === 'edit'
+  ) {
+    const path =
+      (typeof item.path === 'string' && item.path) ||
+      (typeof item.file_path === 'string' && item.file_path) ||
+      (typeof item.filename === 'string' && item.filename) ||
+      '';
+    const detail =
+      path ||
+      stringifyDetail(item, 280) ||
+      itemType;
+    return [
+      {
+        kind: 'tool',
+        text: itemType.replace(/_/g, ' '),
+        detail,
+        muted: true,
+        icon: 'construct',
+      },
+    ];
+  }
+
+  if (itemType === 'webSearch' || itemType === 'web_search' || itemType === 'search') {
+    const q =
+      (typeof item.query === 'string' && item.query) ||
+      (typeof item.q === 'string' && item.q) ||
+      '';
+    return [
+      {
+        kind: 'tool',
+        text: 'search',
+        detail: q || stringifyDetail(item, 200),
+        muted: true,
+        icon: 'construct',
+      },
+    ];
+  }
+
+  if (itemType === 'error' || item.status === 'failed') {
+    const msg =
+      (typeof item.message === 'string' && item.message) ||
+      (typeof item.error === 'string' && item.error) ||
+      (typeof item.text === 'string' && item.text) ||
+      'Agent item failed';
+    return [{ kind: 'error', text: msg, icon: 'alert' }];
+  }
+
+  // Unknown item — show a compact label rather than swallowing agent work
+  const label = itemType || 'item';
+  const detail =
+    (typeof item.text === 'string' && item.text.trim()) ||
+    textFromCodexContent(item.content) ||
+    stringifyDetail(item, 200);
+  if (!detail) return [{ kind: 'hidden', text: '' }];
+  return [
+    {
+      kind: 'meta',
+      text: label.replace(/_/g, ' '),
+      detail,
+      muted: true,
+    },
+  ];
+}
+
+function parseCodexSdkEvent(event: Record<string, unknown>): TranscriptPart[] {
+  const eventType = String(event.type || '');
+
+  // Lifecycle noise
+  if (
+    eventType === 'thread.started' ||
+    eventType === 'thread.completed' ||
+    eventType === 'turn.started' ||
+    eventType === 'turn.completed'
+  ) {
+    return [{ kind: 'hidden', text: '' }];
+  }
+
+  // Prefer completed items (full text / output). Started often has empty agentMessage.text.
+  // Still show started when it already carries content (live streaming).
+  if (
+    eventType === 'item.completed' ||
+    eventType === 'item.started' ||
+    eventType === 'item.updated' ||
+    eventType === 'item.done'
+  ) {
+    const item = asRecord(event.item);
+    if (!item) return [{ kind: 'hidden', text: '' }];
+
+    // Skip empty starts for agent text (completed will carry the final answer)
+    if (eventType === 'item.started') {
+      const itemType = String(item.type || '');
+      if (
+        itemType === 'agentMessage' ||
+        itemType === 'message' ||
+        itemType === 'assistantMessage'
+      ) {
+        const text =
+          (typeof item.text === 'string' && item.text.trim()) ||
+          textFromCodexContent(item.content);
+        if (!text) return [{ kind: 'hidden', text: '' }];
+      }
+      // Skip empty reasoning starts
+      if (itemType === 'reasoning' || itemType === 'thinking') {
+        return [{ kind: 'hidden', text: '' }];
+      }
+      // Skip userMessage duplicates
+      if (itemType === 'userMessage') {
+        return [{ kind: 'hidden', text: '' }];
+      }
+      // For commandExecution, only show on completed to avoid double rows
+      if (
+        itemType === 'commandExecution' ||
+        itemType === 'command' ||
+        itemType === 'bash' ||
+        itemType === 'shell'
+      ) {
+        return [{ kind: 'hidden', text: '' }];
+      }
+    }
+
+    return parseCodexItem(item);
+  }
+
+  if (eventType === 'error') {
+    const msg =
+      (typeof event.message === 'string' && event.message) ||
+      (typeof event.error === 'string' && event.error) ||
+      'Agent error';
+    return [{ kind: 'error', text: msg, icon: 'alert' }];
+  }
+
+  // Unknown event type — hide pure noise; show if it has readable text
+  if (!eventType) return [{ kind: 'hidden', text: '' }];
+  return [{ kind: 'hidden', text: '' }];
+}
+
 function parseAgentPayload(raw: unknown): TranscriptPart[] {
   const payload = asRecord(raw);
   if (!payload) {
@@ -207,6 +459,12 @@ function parseAgentPayload(raw: unknown): TranscriptPart[] {
         muted: true,
       },
     ];
+  }
+
+  // Codex / Responses SDK: { event: { type, item? }, thread_id }
+  const codexEvent = asRecord(payload.event);
+  if (codexEvent && typeof codexEvent.type === 'string') {
+    return parseCodexSdkEvent(codexEvent);
   }
 
   // Some result events omit type but have result + is_error
