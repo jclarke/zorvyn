@@ -29,6 +29,7 @@ import { colors, spacing } from '@/lib/theme';
 
 const KEYS_URL = 'https://app.conductor.build/users/api-keys';
 const DOCS_URL = 'https://www.conductor.build/docs/api';
+const SOURCE_URL = 'https://github.com/jclarke/zorvyn';
 // Classic PAT form with required scopes pre-checked (repo covers private PR/file reads).
 // https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens
 const GITHUB_TOKEN_URL =
@@ -176,7 +177,7 @@ export default function SettingsScreen() {
         <SectionHeader title="Conductor Cloud" />
         <Card style={styles.card}>
           <Body muted>
-            Zorvyn is an independent client for{' '}
+            Zorvyn is an independent, open-source client for{' '}
             <Text style={styles.em}>Conductor Cloud</Text> only. It talks to{' '}
             <Text style={styles.mono}>{API_BASE}</Text> and is not affiliated
             with Conductor.
@@ -217,6 +218,21 @@ export default function SettingsScreen() {
             variant="ghost"
             onPress={() => Linking.openURL(DOCS_URL)}
           />
+        </Card>
+
+        <SectionHeader title="Open source" />
+        <Card style={styles.card}>
+          <Body muted>
+            Zorvyn is free and open source under the MIT license. Contributions,
+            issues, and forks are welcome.
+          </Body>
+          <Button
+            title="View source on GitHub"
+            variant="secondary"
+            icon="logo-github"
+            onPress={() => Linking.openURL(SOURCE_URL)}
+          />
+          <Caption>{SOURCE_URL.replace(/^https?:\/\//, '')}</Caption>
         </Card>
 
         <SectionHeader title="GitHub (optional)" />
@@ -290,7 +306,6 @@ export default function SettingsScreen() {
             'Agent chat with live status',
             'Activity search over transcripts',
             'Changes — agent file activity + GitHub PR files',
-            'Linear/GitHub links detected in transcripts',
           ].map((line) => (
             <Text key={line} style={styles.bullet}>
               · {line}
@@ -307,7 +322,11 @@ export default function SettingsScreen() {
         />
 
         <Caption style={styles.footer}>
-          Zorvyn · independent client for Conductor Cloud
+          Zorvyn · open source · independent client for Conductor Cloud
+          {'\n'}
+          <Text style={styles.em} onPress={() => Linking.openURL(SOURCE_URL)}>
+            github.com/jclarke/zorvyn
+          </Text>
           {'\n'}
           Keys: app.conductor.build/users/api-keys ·{' '}
           {shortId(me?.userId, 12)}

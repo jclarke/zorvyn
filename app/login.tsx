@@ -20,6 +20,7 @@ import { colors, radius, spacing } from '@/lib/theme';
 const KEYS_URL = 'https://app.conductor.build/users/api-keys';
 const SITE_URL = 'https://jclarke.xyz';
 const X_URL = 'https://x.com/jclarke';
+const SOURCE_URL = 'https://github.com/jclarke/zorvyn';
 
 export default function LoginScreen() {
   const { signIn, error: bootstrapError } = useAuth();
@@ -68,10 +69,18 @@ export default function LoginScreen() {
             </View>
             <Title>Your agents, within reach.</Title>
             <Body muted style={styles.tagline}>
-              Independent client for{' '}
+              Independent, open-source client for{' '}
               <Text style={styles.em}>Conductor Cloud</Text>. Open workspaces,
               steer coding sessions, and ship from your phone or browser.
             </Body>
+            <Pressable
+              onPress={() => Linking.openURL(SOURCE_URL)}
+              style={styles.sourceRow}
+            >
+              <Text style={styles.sourceLink}>
+                Open source · View on GitHub →
+              </Text>
+            </Pressable>
           </View>
 
           <View style={styles.form}>
@@ -134,6 +143,12 @@ export default function LoginScreen() {
             </Text>
 
             <View style={styles.creditBlock}>
+              <Text style={styles.footerText}>
+                Open source under the MIT license
+              </Text>
+              <Pressable onPress={() => Linking.openURL(SOURCE_URL)}>
+                <Text style={styles.link}>Source on GitHub</Text>
+              </Pressable>
               <Text style={styles.footerText}>Created by</Text>
               <Text style={styles.creditLine}>
                 <Text
@@ -198,6 +213,15 @@ const styles = StyleSheet.create({
   },
   tagline: {
     lineHeight: 24,
+  },
+  sourceRow: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.xs,
+  },
+  sourceLink: {
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: '600',
   },
   em: {
     color: colors.text,

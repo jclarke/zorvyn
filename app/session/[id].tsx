@@ -9,7 +9,6 @@ import React, {
 } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   FlatList,
   KeyboardAvoidingView,
   Modal,
@@ -75,6 +74,9 @@ export default function SessionChatScreen() {
   const [seenWorking, setSeenWorking] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [archiveConfirmOpen, setArchiveConfirmOpen] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   const [hasOlder, setHasOlder] = useState(false);
 
   const listRef = useRef<FlatList>(null);
@@ -93,7 +95,13 @@ export default function SessionChatScreen() {
     navigation.setOptions({
       title: name || session?.name || 'Chat',
       headerRight: () => (
-        <Pressable onPress={showMenu} hitSlop={10} style={styles.headerRight}>
+        <Pressable
+          onPress={() => setMenuOpen(true)}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Session menu"
+          style={styles.headerRight}
+        >
           <Ionicons
             name="ellipsis-horizontal"
             size={22}
@@ -102,8 +110,7 @@ export default function SessionChatScreen() {
         </Pressable>
       ),
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, name, session?.name, status?.status]);
+  }, [navigation, name, session?.name]);
 
   const setMessageWindow = useCallback((incoming: Message[], replace: boolean) => {
     setMessages((prev) => {
@@ -289,6 +296,7 @@ export default function SessionChatScreen() {
 
   async function onCancel() {
     if (!client) return;
+    setMenuOpen(false);
     try {
       const res = await client.cancelSession(id);
       setStatus((prev) =>
@@ -301,14 +309,13 @@ export default function SessionChatScreen() {
               updatedAt: new Date().toISOString(),
             },
       );
-      Alert.alert(
-        'Cancel requested',
+      setError(
         res.canceledQueuedMessages
-          ? `Dropped ${res.canceledQueuedMessages} queued message(s). Polling until idle.`
-          : 'Stopping the current turn…',
+          ? `Cancel requested — dropped ${res.canceledQueuedMessages} queued message(s).`
+          : 'Cancel requested — stopping the current turn…',
       );
     } catch (e) {
-      Alert.alert('Cancel failed', e instanceof Error ? e.message : 'Error');
+      setError(e instanceof Error ? e.message : 'Cancel failed');
     }
   }
 
@@ -321,55 +328,34 @@ export default function SessionChatScreen() {
       setRenameOpen(false);
       navigation.setOptions({ title: s.name || 'Chat' });
     } catch (e) {
-      Alert.alert('Rename failed', e instanceof Error ? e.message : 'Error');
+      setError(e instanceof Error ? e.message : 'Rename failed');
     }
   }
 
-  function showMenu() {
-    Alert.alert('Session', undefined, [
-      {
-        text: 'Rename',
-        onPress: () => {
-          setRenameValue(session?.name || '');
-          setRenameOpen(true);
-        },
-      },
-      {
-        text: status?.status === 'working' ? 'Stop agent' : 'Cancel turn',
-        style: 'destructive',
-        onPress: onCancel,
-      },
-      {
-        text: 'Archive session',
-        style: 'destructive',
-        onPress: () => {
-          Alert.alert(
-            'Archive session',
-            'Close this chat tab, stop the agent, and drop queued messages?',
-            [
-              { text: 'Cancel', style: 'cancel' },
-              {
-                text: 'Archive',
-                style: 'destructive',
-                onPress: async () => {
-                  if (!client) return;
-                  try {
-                    await client.archiveSession(id);
-                    await loadInitial();
-                  } catch (e) {
-                    Alert.alert(
-                      'Archive failed',
-                      e instanceof Error ? e.message : 'Error',
-                    );
-                  }
-                },
-              },
-            ],
-          );
-        },
-      },
-      { text: 'Dismiss', style: 'cancel' },
-    ]);
+  function openRenameFromMenu() {
+    setMenuOpen(false);
+    setRenameValue(session?.name || '');
+    setRenameOpen(true);
+  }
+
+  function openArchiveConfirm() {
+    setMenuOpen(false);
+    setArchiveConfirmOpen(true);
+  }
+
+  async function confirmArchive() {
+    if (!client) return;
+    setArchiving(true);
+    try {
+      await client.archiveSession(id);
+      setArchiveConfirmOpen(false);
+      await loadInitial();
+    } catch (e) {
+      setArchiveConfirmOpen(false);
+      setError(e instanceof Error ? e.message : 'Archive failed');
+    } finally {
+      setArchiving(false);
+    }
   }
 
   if (!client || (loading && !listData.length && !messages.length)) {
@@ -535,6 +521,105 @@ export default function SessionChatScreen() {
             )}
           </Pressable>
         </View>
+
+        {/* Action sheet — Alert.alert multi-button menus do not work on web/PWA */}
+        <Modal
+          visible={menuOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setMenuOpen(false)}
+        >
+          <Pressable
+            style={styles.menuBackdrop}
+            onPress={() => setMenuOpen(false)}
+          >
+            <Pressable style={styles.menuSheet} onPress={() => {}}>
+              <Text style={styles.menuTitle}>Session</Text>
+              <Pressable
+                style={styles.menuItem}
+                onPress={openRenameFromMenu}
+                accessibilityRole="button"
+              >
+                <Ionicons
+                  name="pencil-outline"
+                  size={20}
+                  color={colors.text}
+                />
+                <Text style={styles.menuItemText}>Rename</Text>
+              </Pressable>
+              <Pressable
+                style={styles.menuItem}
+                onPress={() => void onCancel()}
+                accessibilityRole="button"
+              >
+                <Ionicons
+                  name="stop-circle-outline"
+                  size={20}
+                  color={colors.danger}
+                />
+                <Text style={[styles.menuItemText, styles.menuItemDanger]}>
+                  {status?.status === 'working' ? 'Stop agent' : 'Cancel turn'}
+                </Text>
+              </Pressable>
+              <Pressable
+                style={styles.menuItem}
+                onPress={openArchiveConfirm}
+                accessibilityRole="button"
+              >
+                <Ionicons
+                  name="archive-outline"
+                  size={20}
+                  color={colors.danger}
+                />
+                <Text style={[styles.menuItemText, styles.menuItemDanger]}>
+                  Archive session
+                </Text>
+              </Pressable>
+              <Pressable
+                style={[styles.menuItem, styles.menuItemLast]}
+                onPress={() => setMenuOpen(false)}
+                accessibilityRole="button"
+              >
+                <Text style={styles.menuItemMuted}>Dismiss</Text>
+              </Pressable>
+            </Pressable>
+          </Pressable>
+        </Modal>
+
+        <Modal
+          visible={archiveConfirmOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setArchiveConfirmOpen(false)}
+        >
+          <Pressable
+            style={styles.modalBackdrop}
+            onPress={() => setArchiveConfirmOpen(false)}
+          >
+            <Pressable style={styles.modalCard} onPress={() => {}}>
+              <Text style={styles.modalTitle}>Archive session?</Text>
+              <Text style={styles.modalBody}>
+                Close this chat tab, stop the agent, and drop queued messages.
+              </Text>
+              <View style={styles.modalActions}>
+                <Pressable
+                  onPress={() => setArchiveConfirmOpen(false)}
+                  disabled={archiving}
+                >
+                  <Text style={styles.modalCancel}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => void confirmArchive()}
+                  disabled={archiving}
+                >
+                  <Text style={styles.modalDanger}>
+                    {archiving ? 'Archiving…' : 'Archive'}
+                  </Text>
+                </Pressable>
+              </View>
+            </Pressable>
+          </Pressable>
+        </Modal>
 
         <Modal
           visible={renameOpen}
@@ -705,11 +790,19 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     padding: spacing.lg,
     gap: spacing.md,
+    maxWidth: 420,
+    width: '100%',
+    alignSelf: 'center',
   },
   modalTitle: {
     color: colors.text,
     fontSize: 18,
     fontWeight: '700',
+  },
+  modalBody: {
+    color: colors.textSecondary,
+    fontSize: 15,
+    lineHeight: 22,
   },
   modalInput: {
     backgroundColor: colors.bgElevated,
@@ -736,5 +829,64 @@ const styles = StyleSheet.create({
     color: colors.accent,
     fontWeight: '700',
     fontSize: 16,
+  },
+  modalDanger: {
+    color: colors.danger,
+    fontWeight: '700',
+    fontSize: 16,
+  },
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    justifyContent: 'flex-end',
+    padding: spacing.lg,
+    paddingBottom: spacing.xxl,
+  },
+  menuSheet: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+    maxWidth: 420,
+    width: '100%',
+    alignSelf: 'center',
+  },
+  menuTitle: {
+    color: colors.textMuted,
+    fontSize: 13,
+    fontWeight: '600',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  menuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.borderSubtle,
+  },
+  menuItemLast: {
+    justifyContent: 'center',
+  },
+  menuItemText: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  menuItemDanger: {
+    color: colors.danger,
+  },
+  menuItemMuted: {
+    color: colors.textSecondary,
+    fontSize: 16,
+    fontWeight: '600',
+    textAlign: 'center',
+    width: '100%',
   },
 });
