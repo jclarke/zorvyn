@@ -220,9 +220,10 @@ export default function SettingsScreen() {
         <SectionHeader title="GitHub (optional)" />
         <Card style={styles.card}>
           <Body muted>
-            Used on the workspace Changes screen to list pull request files. A
-            fine-grained token can be limited to specific repositories with
-            read-only access.
+            Used on the workspace Changes screen to list pull request files for
+            private org repos (e.g. ez-home-search/…). Fine-grained PATs must
+            explicitly include each repository; GitHub returns “Not Found” if
+            the token cannot see the repo.
           </Body>
           <Button
             title="Create GitHub token"
@@ -231,8 +232,9 @@ export default function SettingsScreen() {
             onPress={() => Linking.openURL(GITHUB_TOKEN_URL)}
           />
           <Caption>
-            Preselects read-only Contents and Pull requests permissions. Choose
-            the repositories Zorvyn should access on GitHub.
+            Grant Contents + Pull requests (read) on the repos you use in
+            Conductor. If the org uses SAML SSO, open the token on GitHub and
+            authorize that organization.
           </Caption>
           <InfoRow
             label="Status"

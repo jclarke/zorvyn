@@ -38,9 +38,10 @@ import {
   type LinkedPull,
 } from '@/lib/changes';
 import {
-  findPullsForBranch,
+  findPullsForWorkspace,
   githubCompareUrl,
   githubPullsUrl,
+  githubRepoUrl,
   githubTreeUrl,
   listPullFiles,
   loadGithubToken,
@@ -84,8 +85,13 @@ export default function WorkspaceChangesScreen() {
   const [githubLoading, setGithubLoading] = useState(false);
   const [selectedPull, setSelectedPull] = useState<GithubPull | null>(null);
 
-  const loadAgentActivity = useCallback(async () => {
-    if (!client || !workspaceId) return;
+  const loadAgentActivity = useCallback(async (): Promise<{
+    repoUrl: string | null;
+    linkedPulls: LinkedPull[];
+  }> => {
+    if (!client || !workspaceId) {
+      return { repoUrl: null, linkedPulls: [] };
+    }
 
     const sessions = await client.listWorkspaceSessions(workspaceId, {
       limit: 50,
@@ -108,6 +114,7 @@ export default function WorkspaceChangesScreen() {
     setLinkedPulls(links.pulls);
     setLinkedIssues(links.issues);
 
+    let foundRepo: string | null = null;
     // Prefer repo_url from SQL when available
     try {
       const sql = await client.runSql({
@@ -115,15 +122,22 @@ export default function WorkspaceChangesScreen() {
       });
       const row = sql.rows[0];
       if (row && typeof row.repo_url === 'string') {
+        foundRepo = row.repo_url;
         setRepoUrl(row.repo_url);
       }
     } catch {
       // SQL may be unavailable; continue without
     }
+
+    return { repoUrl: foundRepo, linkedPulls: links.pulls };
   }, [client, workspaceId]);
 
   const loadGithub = useCallback(
-    async (remote: string | null, token: string | null) => {
+    async (
+      remote: string | null,
+      token: string | null,
+      pullsFromTranscript: LinkedPull[],
+    ) => {
       const repo = parseGithubRemote(remote);
       setGithubRepo(repo);
       setGithubPulls([]);
@@ -131,18 +145,42 @@ export default function WorkspaceChangesScreen() {
       setSelectedPull(null);
       setGithubError(null);
 
-      if (!repo || !branch) {
+      if (!repo) {
+        if (remote) {
+          setGithubError('Could not parse GitHub repository URL from workspace.');
+        }
+        return;
+      }
+      if (!token) {
+        setGithubError(
+          `Add a GitHub PAT in Settings with access to ${repo.owner}/${repo.repo}. Fine-grained tokens must include that repository.`,
+        );
         return;
       }
 
+      const linkedPullNumbers = pullsFromTranscript
+        .map((p) => p.number)
+        .filter((n): n is number => typeof n === 'number');
+
       setGithubLoading(true);
       try {
-        const pulls = await findPullsForBranch(repo, branch, token);
+        // Workspace names often aren't git branch names (e.g. "Audit SMS notifications").
+        // Match by linked PR URLs, title similarity, head ref, then recent open PRs.
+        const pulls = await findPullsForWorkspace(repo, {
+          branch: branch.includes(' ') ? undefined : branch || undefined,
+          workspaceName: name || branch || undefined,
+          linkedPullNumbers,
+          token,
+        });
         setGithubPulls(pulls);
         if (pulls[0]) {
           setSelectedPull(pulls[0]);
           const files = await listPullFiles(repo, pulls[0].number, token);
           setGithubFiles(files);
+        } else {
+          setGithubError(
+            `No pull requests matched this workspace in ${repo.owner}/${repo.repo}. Open PRs on GitHub or link a PR URL in chat.`,
+          );
         }
       } catch (e) {
         setGithubError(
@@ -152,7 +190,7 @@ export default function WorkspaceChangesScreen() {
         setGithubLoading(false);
       }
     },
-    [branch],
+    [branch, name],
   );
 
   const load = useCallback(
@@ -166,7 +204,8 @@ export default function WorkspaceChangesScreen() {
         const token = await loadGithubToken();
         setGithubToken(token);
 
-        await loadAgentActivity();
+        const activity = await loadAgentActivity();
+        await loadGithub(activity.repoUrl, token, activity.linkedPulls);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load changes');
       } finally {
@@ -174,18 +213,12 @@ export default function WorkspaceChangesScreen() {
         setRefreshing(false);
       }
     },
-    [client, workspaceId, loadAgentActivity],
+    [client, workspaceId, loadAgentActivity, loadGithub],
   );
 
   useEffect(() => {
     load();
   }, [load]);
-
-  // Once we know repo URL (from SQL or after agent load), hit GitHub
-  useEffect(() => {
-    if (loading) return;
-    void loadGithub(repoUrl, githubToken);
-  }, [loading, repoUrl, githubToken, loadGithub]);
 
   async function selectPull(pull: GithubPull) {
     if (!githubRepo) return;
@@ -255,36 +288,58 @@ export default function WorkspaceChangesScreen() {
               <Text style={{ color: colors.accent, fontWeight: '600' }}>
                 {name || branch || 'workspace'}
               </Text>
-              {branch ? ` · branch ${branch}` : ''}.
+              {githubRepo
+                ? ` · ${githubRepo.owner}/${githubRepo.repo}`
+                : repoUrl
+                  ? ` · ${repoUrl}`
+                  : ''}
+              .
             </Body>
 
             {/* Links & integrations */}
             <SectionHeader title="Links" />
             <ScrollView horizontal showsHorizontalScrollIndicator={false}>
               <View style={styles.linkRow}>
-                {githubRepo && branch ? (
+                {githubRepo ? (
                   <>
                     <LinkChip
                       icon="logo-github"
-                      label="Branch"
+                      label="Repository"
                       onPress={() =>
-                        Linking.openURL(githubTreeUrl(githubRepo, branch))
+                        Linking.openURL(githubRepoUrl(githubRepo))
                       }
                     />
-                    <LinkChip
-                      icon="git-compare-outline"
-                      label="Compare"
-                      onPress={() =>
-                        Linking.openURL(
-                          githubCompareUrl(githubRepo, branch),
-                        )
-                      }
-                    />
+                    {selectedPull?.headRef && !selectedPull.headRef.includes(' ') ? (
+                      <>
+                        <LinkChip
+                          icon="git-branch-outline"
+                          label="Branch"
+                          onPress={() =>
+                            Linking.openURL(
+                              githubTreeUrl(githubRepo, selectedPull.headRef),
+                            )
+                          }
+                        />
+                        <LinkChip
+                          icon="git-compare-outline"
+                          label="Compare"
+                          onPress={() =>
+                            Linking.openURL(
+                              githubCompareUrl(
+                                githubRepo,
+                                selectedPull.headRef,
+                                selectedPull.baseRef,
+                              ),
+                            )
+                          }
+                        />
+                      </>
+                    ) : null}
                     <LinkChip
                       icon="git-pull-request-outline"
                       label="PRs"
                       onPress={() =>
-                        Linking.openURL(githubPullsUrl(githubRepo, branch))
+                        Linking.openURL(githubPullsUrl(githubRepo))
                       }
                     />
                   </>
@@ -336,18 +391,28 @@ export default function WorkspaceChangesScreen() {
                     <Caption style={{ color: colors.warning }}>
                       {githubError}
                     </Caption>
-                    <Caption style={{ marginTop: 6 }}>
-                      {githubToken
-                        ? 'Check token scopes (repo) or branch name.'
-                        : 'Private repos need a GitHub token in Settings. Public repos work without one.'}
+                    <Caption style={{ marginTop: 8 }}>
+                      Tips: use a classic PAT with the{' '}
+                      <Text style={{ fontFamily: 'SpaceMono' }}>repo</Text>{' '}
+                      scope, or a fine-grained PAT that includes{' '}
+                      <Text style={{ color: colors.text }}>
+                        {githubRepo.owner}/{githubRepo.repo}
+                      </Text>
+                      . If the org uses SAML SSO, authorize the token for that
+                      org on GitHub.
                     </Caption>
+                    <Button
+                      title="Open GitHub settings"
+                      variant="secondary"
+                      style={{ marginTop: spacing.md }}
+                      onPress={() => router.push('/(tabs)/settings')}
+                    />
                   </Card>
                 ) : githubPulls.length === 0 ? (
                   <Card style={styles.infoCard}>
                     <Caption>
-                      No PR found for branch{' '}
-                      <Text style={{ color: colors.text }}>{branch}</Text>.
-                      Open Compare on GitHub or ask the agent to open a PR.
+                      No open pull requests found for this workspace. Ask the
+                      agent to open a PR, or paste a GitHub PR link in chat.
                     </Caption>
                   </Card>
                 ) : (
