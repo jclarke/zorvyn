@@ -218,6 +218,64 @@ function textFromCodexContent(content: unknown): string {
     .trim();
 }
 
+function truncateText(text: string, max = 2000): string {
+  const t = text.trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}…`;
+}
+
+/** Unwrap `/bin/bash -lc '…'` so tool cards show the real command. */
+function cleanBashCommand(command: string): string {
+  let c = command.trim();
+  const wrapped = c.match(/^\/bin\/bash\s+-lc\s+([\s\S]+)$/i);
+  if (wrapped) {
+    c = wrapped[1].trim();
+    if (
+      (c.startsWith("'") && c.endsWith("'")) ||
+      (c.startsWith('"') && c.endsWith('"'))
+    ) {
+      c = c.slice(1, -1);
+    }
+    // Unescape common shell quoting
+    c = c.replace(/\\'/g, "'").replace(/\\"/g, '"');
+  }
+  return c.trim();
+}
+
+function formatJsonish(value: unknown, max = 400): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === 'string') {
+    const t = value.trim();
+    return t ? truncateText(t, max) : undefined;
+  }
+  try {
+    return truncateText(JSON.stringify(value, null, 0), max);
+  } catch {
+    return String(value).slice(0, max);
+  }
+}
+
+function nicknameFromSubAgent(item: Record<string, unknown>): string | undefined {
+  const receivers = item.receiverThreads;
+  if (Array.isArray(receivers) && receivers.length) {
+    const names = receivers
+      .map((r) => {
+        const rec = asRecord(r);
+        return rec && typeof rec.agentNickname === 'string'
+          ? rec.agentNickname
+          : null;
+      })
+      .filter((n): n is string => !!n);
+    if (names.length) return names.join(', ');
+  }
+  if (typeof item.agentNickname === 'string') return item.agentNickname;
+  if (typeof item.agentPath === 'string') {
+    const parts = item.agentPath.split('/').filter(Boolean);
+    return parts[parts.length - 1] || item.agentPath;
+  }
+  return undefined;
+}
+
 function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
   const itemType = String(item.type || '');
 
@@ -243,7 +301,15 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
         .map((s) => {
           if (typeof s === 'string') return s;
           const r = asRecord(s);
-          return (r && (typeof r.text === 'string' ? r.text : typeof r.summary === 'string' ? r.summary : '')) || '';
+          return (
+            (r &&
+              (typeof r.text === 'string'
+                ? r.text
+                : typeof r.summary === 'string'
+                  ? r.summary
+                  : '')) ||
+            ''
+          );
         })
         .filter(Boolean)
         .join('\n')
@@ -269,31 +335,62 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
     itemType === 'bash' ||
     itemType === 'shell'
   ) {
-    const command =
+    const rawCommand =
       (typeof item.command === 'string' && item.command) ||
       (typeof item.cmd === 'string' && item.cmd) ||
       '';
+    const command = rawCommand ? cleanBashCommand(rawCommand) : '';
     const output =
       (typeof item.aggregatedOutput === 'string' && item.aggregatedOutput) ||
       (typeof item.output === 'string' && item.output) ||
       (typeof item.stdout === 'string' && item.stdout) ||
       '';
     const status = typeof item.status === 'string' ? item.status : '';
+    const failed = status === 'failed' || status === 'error';
+
+    // Prefer a friendly label when the agent recorded a read/write action
+    let toolLabel = 'bash';
+    let toolDetail = command;
+    if (Array.isArray(item.commandActions) && item.commandActions.length) {
+      const action = asRecord(item.commandActions[0]);
+      if (action) {
+        const actionType =
+          typeof action.type === 'string' ? action.type.toLowerCase() : '';
+        const path =
+          (typeof action.path === 'string' && action.path) ||
+          (typeof action.name === 'string' && action.name) ||
+          '';
+        if (actionType === 'read' && path) {
+          toolLabel = 'read';
+          toolDetail = path;
+        } else if (
+          (actionType === 'write' ||
+            actionType === 'create' ||
+            actionType === 'edit') &&
+          path
+        ) {
+          toolLabel = actionType;
+          toolDetail = path;
+        }
+      }
+    }
+
     const parts: TranscriptPart[] = [];
-    if (command) {
+    if (toolDetail || command) {
       parts.push({
         kind: 'tool',
-        text: 'bash',
-        detail: command,
+        text: toolLabel,
+        detail: toolDetail || command,
         muted: true,
-        icon: 'terminal',
+        icon: toolLabel === 'bash' ? 'terminal' : 'construct',
       });
     }
+    // Put stdout in `detail` — `text` is the single-line header in the UI
     if (output.trim()) {
-      const failed = status === 'failed' || status === 'error';
       parts.push({
         kind: failed ? 'error' : 'tool_result',
-        text: output.trim().length > 2000 ? `${output.trim().slice(0, 2000)}…` : output.trim(),
+        text: failed ? 'failed' : 'output',
+        detail: truncateText(output, 2500),
         muted: !failed,
         icon: failed ? 'alert' : 'checkmark',
       });
@@ -309,6 +406,124 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
     return parts.length ? parts : [{ kind: 'hidden', text: '' }];
   }
 
+  // Conductor / MCP tools: GetWorkspaceDiff, etc.
+  if (itemType === 'mcpToolCall' || itemType === 'mcp_tool_call') {
+    const server = typeof item.server === 'string' ? item.server : '';
+    const tool =
+      (typeof item.tool === 'string' && item.tool) ||
+      (typeof item.name === 'string' && item.name) ||
+      'mcp';
+    const status = typeof item.status === 'string' ? item.status : '';
+    const failed =
+      status === 'failed' || status === 'error' || item.error != null;
+    const argsDetail = formatJsonish(item.arguments, 300);
+    const label = server ? `${server} · ${tool}` : tool;
+
+    const parts: TranscriptPart[] = [
+      {
+        kind: 'tool',
+        text: label,
+        detail: argsDetail,
+        muted: true,
+        icon: 'construct',
+      },
+    ];
+
+    const result = asRecord(item.result);
+    let resultText = '';
+    if (result) {
+      resultText = textFromCodexContent(result.content);
+      if (!resultText && typeof result.text === 'string') {
+        resultText = result.text;
+      }
+    } else if (typeof item.result === 'string') {
+      resultText = item.result;
+    }
+
+    if (failed) {
+      const err =
+        (typeof item.error === 'string' && item.error) ||
+        (item.error != null && formatJsonish(item.error, 400)) ||
+        'MCP tool failed';
+      parts.push({
+        kind: 'error',
+        text: 'error',
+        detail: err,
+        icon: 'alert',
+      });
+    } else if (resultText.trim()) {
+      parts.push({
+        kind: 'tool_result',
+        text: 'result',
+        detail: truncateText(resultText, 2500),
+        muted: true,
+        icon: 'checkmark',
+      });
+    }
+
+    return parts;
+  }
+
+  // Multi-agent collab tools (wait, spawn, etc.)
+  if (
+    itemType === 'collabAgentToolCall' ||
+    itemType === 'collab_agent_tool_call'
+  ) {
+    const tool =
+      (typeof item.tool === 'string' && item.tool) ||
+      (typeof item.name === 'string' && item.name) ||
+      'collab';
+    const status = typeof item.status === 'string' ? item.status : '';
+    const prompt =
+      (typeof item.prompt === 'string' && item.prompt.trim()) || '';
+    const detailParts: string[] = [];
+    if (status && status !== 'completed') detailParts.push(status);
+    if (prompt) detailParts.push(truncateText(prompt, 400));
+    if (typeof item.model === 'string' && item.model) {
+      detailParts.push(item.model);
+    }
+
+    const label =
+      tool === 'wait'
+        ? 'wait for sub-agents'
+        : tool.replace(/_/g, ' ');
+
+    return [
+      {
+        kind: 'tool',
+        text: label,
+        detail: detailParts.length ? detailParts.join(' · ') : undefined,
+        muted: true,
+        icon: 'time',
+      },
+    ];
+  }
+
+  // Sub-agent lifecycle (started / interacted)
+  if (itemType === 'subAgentActivity' || itemType === 'sub_agent_activity') {
+    const kind = typeof item.kind === 'string' ? item.kind : 'activity';
+    const nick = nicknameFromSubAgent(item);
+    const path = typeof item.agentPath === 'string' ? item.agentPath : '';
+    const verb =
+      kind === 'started'
+        ? 'Sub-agent started'
+        : kind === 'interacted'
+          ? 'Sub-agent active'
+          : kind === 'completed' || kind === 'finished'
+            ? 'Sub-agent finished'
+            : `Sub-agent ${kind.replace(/_/g, ' ')}`;
+
+    return [
+      {
+        kind: 'status',
+        text: nick ? `${verb} · ${nick}` : verb,
+        detail: path || undefined,
+        muted: true,
+        icon: 'sparkles',
+      },
+    ];
+  }
+
   if (
     itemType === 'fileChange' ||
     itemType === 'file_change' ||
@@ -320,15 +535,11 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
       (typeof item.file_path === 'string' && item.file_path) ||
       (typeof item.filename === 'string' && item.filename) ||
       '';
-    const detail =
-      path ||
-      stringifyDetail(item, 280) ||
-      itemType;
     return [
       {
         kind: 'tool',
-        text: itemType.replace(/_/g, ' '),
-        detail,
+        text: 'edit',
+        detail: path || undefined,
         muted: true,
         icon: 'construct',
       },
@@ -344,7 +555,7 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
       {
         kind: 'tool',
         text: 'search',
-        detail: q || stringifyDetail(item, 200),
+        detail: q || undefined,
         muted: true,
         icon: 'construct',
       },
@@ -360,22 +571,40 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
     return [{ kind: 'error', text: msg, icon: 'alert' }];
   }
 
-  // Unknown item — show a compact label rather than swallowing agent work
-  const label = itemType || 'item';
-  const detail =
-    (typeof item.text === 'string' && item.text.trim()) ||
-    textFromCodexContent(item.content) ||
-    stringifyDetail(item, 200);
-  if (!detail) return [{ kind: 'hidden', text: '' }];
+  // Unknown item — short human label only (never dump full JSON into the chat)
+  const label = (itemType || 'item').replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ');
   return [
     {
-      kind: 'meta',
-      text: label.replace(/_/g, ' '),
-      detail,
+      kind: 'status',
+      text: label,
       muted: true,
     },
   ];
 }
+
+/** Item types that only render usefully on completed (avoid start+complete doubles). */
+const CODEX_COMPLETED_ONLY = new Set([
+  'commandExecution',
+  'command',
+  'bash',
+  'shell',
+  'mcpToolCall',
+  'mcp_tool_call',
+  'collabAgentToolCall',
+  'collab_agent_tool_call',
+  'subAgentActivity',
+  'sub_agent_activity',
+  'userMessage',
+  'reasoning',
+  'thinking',
+  'fileChange',
+  'file_change',
+  'applyPatch',
+  'edit',
+  'webSearch',
+  'web_search',
+  'search',
+]);
 
 function parseCodexSdkEvent(event: Record<string, unknown>): TranscriptPart[] {
   const eventType = String(event.type || '');
@@ -385,8 +614,10 @@ function parseCodexSdkEvent(event: Record<string, unknown>): TranscriptPart[] {
     eventType === 'thread.started' ||
     eventType === 'thread.completed' ||
     eventType === 'turn.started' ||
-    eventType === 'turn.completed'
+    eventType === 'turn.completed' ||
+    eventType === 'codex.subAgentStatus'
   ) {
+    // subAgentStatus is high-frequency working pings — UI already has a status bar
     return [{ kind: 'hidden', text: '' }];
   }
 
@@ -400,10 +631,12 @@ function parseCodexSdkEvent(event: Record<string, unknown>): TranscriptPart[] {
   ) {
     const item = asRecord(event.item);
     if (!item) return [{ kind: 'hidden', text: '' }];
+    const itemType = String(item.type || '');
 
-    // Skip empty starts for agent text (completed will carry the final answer)
     if (eventType === 'item.started') {
-      const itemType = String(item.type || '');
+      if (CODEX_COMPLETED_ONLY.has(itemType)) {
+        return [{ kind: 'hidden', text: '' }];
+      }
       if (
         itemType === 'agentMessage' ||
         itemType === 'message' ||
@@ -413,23 +646,6 @@ function parseCodexSdkEvent(event: Record<string, unknown>): TranscriptPart[] {
           (typeof item.text === 'string' && item.text.trim()) ||
           textFromCodexContent(item.content);
         if (!text) return [{ kind: 'hidden', text: '' }];
-      }
-      // Skip empty reasoning starts
-      if (itemType === 'reasoning' || itemType === 'thinking') {
-        return [{ kind: 'hidden', text: '' }];
-      }
-      // Skip userMessage duplicates
-      if (itemType === 'userMessage') {
-        return [{ kind: 'hidden', text: '' }];
-      }
-      // For commandExecution, only show on completed to avoid double rows
-      if (
-        itemType === 'commandExecution' ||
-        itemType === 'command' ||
-        itemType === 'bash' ||
-        itemType === 'shell'
-      ) {
-        return [{ kind: 'hidden', text: '' }];
       }
     }
 
@@ -444,8 +660,7 @@ function parseCodexSdkEvent(event: Record<string, unknown>): TranscriptPart[] {
     return [{ kind: 'error', text: msg, icon: 'alert' }];
   }
 
-  // Unknown event type — hide pure noise; show if it has readable text
-  if (!eventType) return [{ kind: 'hidden', text: '' }];
+  // Unknown event type — hide pure noise
   return [{ kind: 'hidden', text: '' }];
 }
 
