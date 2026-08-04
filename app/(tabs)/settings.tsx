@@ -84,6 +84,11 @@ export default function SettingsScreen() {
     try {
       await signOut();
       router.replace('/login');
+    } catch (e) {
+      const message =
+        e instanceof Error ? e.message : 'Could not remove the saved API key';
+      if (Platform.OS === 'web') window.alert(message);
+      else Alert.alert('Sign out failed', message);
     } finally {
       setSigningOut(false);
     }
@@ -324,7 +329,11 @@ export default function SettingsScreen() {
         <Caption style={styles.footer}>
           Zorvyn · open source · independent client for Conductor Cloud
           {'\n'}
-          <Text style={styles.em} onPress={() => Linking.openURL(SOURCE_URL)}>
+          <Text
+            style={styles.em}
+            onPress={() => Linking.openURL(SOURCE_URL)}
+            accessibilityRole="link"
+          >
             github.com/jclarke/zorvyn
           </Text>
           {'\n'}

@@ -20,6 +20,7 @@ import {
 } from '@/components/ui';
 import { useClient } from '@/lib/auth';
 import { formatRelativeTime } from '@/lib/format';
+import { collectPaginated, mapWithConcurrency } from '@/lib/pagination';
 import type { Project, WorkspaceLifecycleStatus, WorkspaceSummary } from '@/lib/types';
 import { colors, spacing } from '@/lib/theme';
 
@@ -56,26 +57,30 @@ export default function ProjectDetailScreen() {
         else setLoading(true);
         setError(null);
 
-        const [p, w] = await Promise.all([
+        const [p, workspaceData] = await Promise.all([
           client.getProject(id),
-          client.listProjectWorkspaces(id, { limit: 100 }),
+          collectPaginated((offset, limit) =>
+            client.listProjectWorkspaces(id, { offset, limit }),
+          ),
         ]);
         setProject(p);
 
         // List endpoint has no status field — fetch lifecycle for each workspace.
-        const statuses = await Promise.all(
-          w.data.map(async (ws) => {
+        const statuses = await mapWithConcurrency(
+          workspaceData,
+          8,
+          async (ws) => {
             try {
               const st = await client.getWorkspaceStatus(ws.id);
               return [ws.id, st.status] as const;
             } catch {
               return [ws.id, undefined] as const;
             }
-          }),
+          },
         );
         const statusById = new Map(statuses);
         setWorkspaces(
-          w.data.map((ws) => ({
+          workspaceData.map((ws) => ({
             ...ws,
             status: statusById.get(ws.id),
           })),

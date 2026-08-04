@@ -76,6 +76,8 @@ export default function LoginScreen() {
             <Pressable
               onPress={() => Linking.openURL(SOURCE_URL)}
               style={styles.sourceRow}
+              accessibilityRole="link"
+              accessibilityLabel="View Zorvyn source on GitHub"
             >
               <Text style={styles.sourceLink}>
                 Open source · View on GitHub →
@@ -113,12 +115,17 @@ export default function LoginScreen() {
               <Text
                 style={styles.link}
                 onPress={() => Linking.openURL(KEYS_URL)}
+                accessibilityRole="link"
               >
                 app.conductor.build/users/api-keys
               </Text>
               .
             </Text>
-            <Pressable onPress={() => Linking.openURL(KEYS_URL)}>
+            <Pressable
+              onPress={() => Linking.openURL(KEYS_URL)}
+              accessibilityRole="link"
+              accessibilityLabel="Open Conductor API key settings"
+            >
               <Text style={[styles.link, styles.helpCenter]}>
                 Open key settings →
               </Text>
@@ -146,7 +153,11 @@ export default function LoginScreen() {
               <Text style={styles.footerText}>
                 Open source under the MIT license
               </Text>
-              <Pressable onPress={() => Linking.openURL(SOURCE_URL)}>
+              <Pressable
+                onPress={() => Linking.openURL(SOURCE_URL)}
+                accessibilityRole="link"
+                accessibilityLabel="Source on GitHub"
+              >
                 <Text style={styles.link}>Source on GitHub</Text>
               </Pressable>
               <Text style={styles.footerText}>Created by</Text>
@@ -154,6 +165,7 @@ export default function LoginScreen() {
                 <Text
                   style={styles.link}
                   onPress={() => Linking.openURL(SITE_URL)}
+                  accessibilityRole="link"
                 >
                   Hosting Playground Inc
                 </Text>
@@ -161,11 +173,16 @@ export default function LoginScreen() {
                 <Text
                   style={styles.link}
                   onPress={() => Linking.openURL(SITE_URL)}
+                  accessibilityRole="link"
                 >
                   Joe Clarke
                 </Text>
               </Text>
-              <Pressable onPress={() => Linking.openURL(X_URL)}>
+              <Pressable
+                onPress={() => Linking.openURL(X_URL)}
+                accessibilityRole="link"
+                accessibilityLabel="Joe Clarke on X"
+              >
                 <Text style={styles.link}>@jclarke on X</Text>
               </Pressable>
             </View>

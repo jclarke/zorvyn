@@ -21,6 +21,7 @@ import {
 } from '@/components/ui';
 import { useClient } from '@/lib/auth';
 import { confirmAction, showMessage } from '@/lib/dialogs';
+import { collectPaginated } from '@/lib/pagination';
 import type { Session, WorkspaceStatus, WorkspaceSummary } from '@/lib/types';
 import { colors, spacing } from '@/lib/theme';
 
@@ -54,14 +55,16 @@ export default function WorkspaceDetailScreen() {
         else setLoading(true);
         setError(null);
 
-        const [w, s, sess] = await Promise.all([
+        const [w, s, sessionData] = await Promise.all([
           client.getWorkspace(id),
           client.getWorkspaceStatus(id),
-          client.listWorkspaceSessions(id, { limit: 100 }),
+          collectPaginated((offset, limit) =>
+            client.listWorkspaceSessions(id, { offset, limit }),
+          ),
         ]);
         setWorkspace(w);
         setStatus(s);
-        setSessions(sess.data);
+        setSessions(sessionData);
         setNewName(w.name);
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load workspace');
@@ -169,6 +172,7 @@ export default function WorkspaceDetailScreen() {
               <View style={styles.renameRow}>
                 <TextInput
                   style={styles.renameInput}
+                  accessibilityLabel="Workspace name"
                   value={newName}
                   onChangeText={setNewName}
                   autoFocus

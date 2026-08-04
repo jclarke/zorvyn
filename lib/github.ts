@@ -1,6 +1,7 @@
 import { deleteSecret, getSecret, setSecret } from './storage';
 import type { LinkedPull } from './changes';
 import { linkedPullNumbersForRepo } from './github-refs';
+import { collectNumberedPages } from './pagination';
 
 export { linkedPullNumbersForRepo } from './github-refs';
 
@@ -396,9 +397,11 @@ export async function listPullFiles(
   pullNumber: number,
   token: string | null,
 ): Promise<GithubPullFile[]> {
-  const files = await githubFetch<GhFileRaw[]>(
-    `/repos/${repo.owner}/${repo.repo}/pulls/${pullNumber}/files?per_page=100`,
-    token,
+  const files = await collectNumberedPages((page, perPage) =>
+    githubFetch<GhFileRaw[]>(
+      `/repos/${repo.owner}/${repo.repo}/pulls/${pullNumber}/files?per_page=${perPage}&page=${page}`,
+      token,
+    ),
   );
 
   return files.map((f) => ({

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 
 import {
@@ -11,7 +12,13 @@ import {
   boundMarkdownInput,
   MAX_MARKDOWN_CHARS,
   parseMarkdownBlocks,
+  parseMarkdownInline,
 } from '../lib/markdown';
+import {
+  collectNumberedPages,
+  collectPaginated,
+  mapWithConcurrency,
+} from '../lib/pagination';
 import type { Message } from '../lib/types';
 
 test('Codex efforts follow the Conductor model constraints', () => {
@@ -108,4 +115,74 @@ test('markdown is bounded and parsed without automatic linkification', () => {
     blocks.map((block) => block.kind),
     ['heading', 'list', 'code'],
   );
+});
+
+test('inline markdown parsing is bounded-time and preserves supported tokens', () => {
+  assert.deepEqual(
+    parseMarkdownInline(
+      'See [docs](https://example.com) with **bold**, _care_, and `code`.',
+    ),
+    [
+      { kind: 'text', text: 'See ' },
+      { kind: 'link', text: 'docs', url: 'https://example.com' },
+      { kind: 'text', text: ' with ' },
+      { kind: 'strong', text: 'bold' },
+      { kind: 'text', text: ', ' },
+      { kind: 'em', text: 'care' },
+      { kind: 'text', text: ', and ' },
+      { kind: 'code', text: 'code' },
+      { kind: 'text', text: '.' },
+    ],
+  );
+
+  const adversarial = '['.repeat(MAX_MARKDOWN_CHARS);
+  const started = performance.now();
+  assert.deepEqual(parseMarkdownInline(adversarial), [
+    { kind: 'text', text: adversarial },
+  ]);
+  assert.ok(performance.now() - started < 250);
+});
+
+test('pagination drains every page and rejects a stalled cursor', async () => {
+  const values = await collectPaginated(async (offset, limit) => ({
+    data: [0, 1, 2, 3, 4].slice(offset, offset + limit),
+    offset,
+    hasMore: offset + limit < 5,
+  }), 2);
+  assert.deepEqual(values, [0, 1, 2, 3, 4]);
+
+  await assert.rejects(
+    () =>
+      collectPaginated(async (offset) => ({
+        data: [],
+        offset,
+        hasMore: true,
+      })),
+    /did not advance/,
+  );
+
+  await assert.rejects(
+    () =>
+      collectPaginated(async () => ({
+        data: [1],
+        offset: 99,
+        hasMore: false,
+      })),
+    /expected 0/,
+  );
+});
+
+test('numbered pagination and bounded mapping preserve item order', async () => {
+  const values = await collectNumberedPages(async (page, perPage) => {
+    const all = [1, 2, 3, 4, 5];
+    const start = (page - 1) * perPage;
+    return all.slice(start, start + perPage);
+  }, 2);
+  assert.deepEqual(values, [1, 2, 3, 4, 5]);
+
+  const mapped = await mapWithConcurrency([3, 1, 2], 2, async (value) => {
+    await new Promise((resolve) => setTimeout(resolve, value));
+    return value * 2;
+  });
+  assert.deepEqual(mapped, [6, 2, 4]);
 });

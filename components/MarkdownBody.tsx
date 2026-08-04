@@ -8,37 +8,27 @@ import {
 } from 'react-native';
 
 import { colors, radius, spacing } from '@/lib/theme';
-import { parseMarkdownBlocks } from '@/lib/markdown';
+import { parseMarkdownBlocks, parseMarkdownInline } from '@/lib/markdown';
 
 export type MarkdownVariant = 'agent' | 'user' | 'error' | 'thinking';
 
-const INLINE_TOKEN = /(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
-
 function inlineNodes(text: string, palette: Palette): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  let cursor = 0;
-  let key = 0;
-
-  for (const match of text.matchAll(INLINE_TOKEN)) {
-    const index = match.index ?? 0;
-    if (index > cursor) nodes.push(text.slice(cursor, index));
-    const token = match[0];
-    const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
-
-    if (link) {
-      const url = link[2];
-      nodes.push(
+  return parseMarkdownInline(text).map((token, key) => {
+    if (token.kind === 'text') return token.text;
+    if (token.kind === 'link') {
+      return (
         <Text
           key={`link-${key}`}
           style={[{ color: palette.link }, styles.link]}
-          onPress={() => void Linking.openURL(url)}
+          onPress={() => void Linking.openURL(token.url)}
           accessibilityRole="link"
         >
-          {link[1]}
-        </Text>,
+          {token.text}
+        </Text>
       );
-    } else if (token.startsWith('`')) {
-      nodes.push(
+    }
+    if (token.kind === 'code') {
+      return (
         <Text
           key={`code-${key}`}
           style={[
@@ -46,28 +36,23 @@ function inlineNodes(text: string, palette: Palette): ReactNode[] {
             { color: palette.codeFg, backgroundColor: palette.codeBg },
           ]}
         >
-          {token.slice(1, -1)}
-        </Text>,
-      );
-    } else if (token.startsWith('**') || token.startsWith('__')) {
-      nodes.push(
-        <Text key={`strong-${key}`} style={styles.strong}>
-          {token.slice(2, -2)}
-        </Text>,
-      );
-    } else {
-      nodes.push(
-        <Text key={`em-${key}`} style={styles.em}>
-          {token.slice(1, -1)}
-        </Text>,
+          {token.text}
+        </Text>
       );
     }
-    cursor = index + token.length;
-    key += 1;
-  }
-
-  if (cursor < text.length) nodes.push(text.slice(cursor));
-  return nodes;
+    if (token.kind === 'strong') {
+      return (
+        <Text key={`strong-${key}`} style={styles.strong}>
+          {token.text}
+        </Text>
+      );
+    }
+    return (
+      <Text key={`em-${key}`} style={styles.em}>
+        {token.text}
+      </Text>
+    );
+  });
 }
 
 type Palette = {

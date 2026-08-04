@@ -170,6 +170,7 @@ export function AgentPicker({
           <Switch
             value={!!value.fastMode}
             onValueChange={(fastMode) => onChange({ ...value, fastMode })}
+            accessibilityLabel="Fast mode"
             trackColor={{ false: colors.border, true: colors.accentBorder }}
             thumbColor={value.fastMode ? colors.accent : colors.textMuted}
           />

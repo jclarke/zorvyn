@@ -43,6 +43,9 @@ export default function CreateSessionScreen() {
           onPress={() => router.back()}
           hitSlop={12}
           disabled={loading}
+          accessibilityRole="button"
+          accessibilityLabel="Go back"
+          accessibilityState={{ disabled: loading }}
           style={{ opacity: loading ? 0.4 : 1, paddingHorizontal: 4 }}
         >
           <Text style={styles.headerCancel}>Cancel</Text>

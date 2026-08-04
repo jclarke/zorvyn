@@ -26,6 +26,7 @@ import {
   SectionHeader,
 } from '@/components/ui';
 import { useClient } from '@/lib/auth';
+import { collectPaginated, mapWithConcurrency } from '@/lib/pagination';
 import {
   basename,
   dirname,
@@ -51,7 +52,6 @@ import {
   type GithubPullFile,
   type GithubRepo,
 } from '@/lib/github';
-import type { Message } from '@/lib/types';
 import { colors, radius, spacing } from '@/lib/theme';
 
 export default function WorkspaceChangesScreen() {
@@ -96,22 +96,21 @@ export default function WorkspaceChangesScreen() {
       return { repoUrl: null, linkedPulls: [], branchCandidates: [] };
     }
 
-    const sessions = await client.listWorkspaceSessions(workspaceId, {
-      limit: 50,
-    });
-    const active = sessions.data.filter((s) => !s.archivedAt);
+    const sessions = await collectPaginated((offset, limit) =>
+      client.listWorkspaceSessions(workspaceId, { offset, limit }),
+    );
+    const active = sessions.filter((s) => !s.archivedAt);
 
-    const messageLists = await Promise.all(
-      active.slice(0, 12).map((s) =>
-        client.listMessages(s.id, { limit: 100 }).catch(() => ({
-          data: [] as Message[],
-          offset: 0,
-          hasMore: false,
-        })),
-      ),
+    const messageLists = await mapWithConcurrency(
+      active,
+      4,
+      (session) =>
+        collectPaginated((offset, limit) =>
+          client.listMessages(session.id, { offset, limit }),
+        ),
     );
 
-    const allMessages = messageLists.flatMap((m) => m.data);
+    const allMessages = messageLists.flat();
     setAgentFiles(extractFileChanges(allMessages));
     const links = extractLinkedResources(allMessages);
     setLinkedPulls(links.pulls);
@@ -452,6 +451,11 @@ export default function WorkspaceChangesScreen() {
                       <Pressable
                         key={p.number}
                         onPress={() => selectPull(p)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Select pull request ${p.number}: ${p.title}`}
+                        accessibilityState={{
+                          selected: selectedPull?.number === p.number,
+                        }}
                         style={[
                           styles.prCard,
                           selectedPull?.number === p.number &&
@@ -470,6 +474,8 @@ export default function WorkspaceChangesScreen() {
                           <Pressable
                             onPress={() => Linking.openURL(p.htmlUrl)}
                             hitSlop={8}
+                            accessibilityRole="link"
+                            accessibilityLabel={`Open pull request ${p.number} on GitHub`}
                           >
                             <Ionicons
                               name="open-outline"
@@ -568,7 +574,12 @@ function LinkChip({
   onPress: () => void;
 }) {
   return (
-    <Pressable onPress={onPress} style={styles.linkChip}>
+    <Pressable
+      onPress={onPress}
+      style={styles.linkChip}
+      accessibilityRole="link"
+      accessibilityLabel={label}
+    >
       <Ionicons name={icon} size={14} color={colors.accent} />
       <Text style={styles.linkChipText}>{label}</Text>
     </Pressable>
@@ -607,7 +618,11 @@ function GithubFileRow({ file }: { file: GithubPullFile }) {
           −{file.deletions}
         </Text>
         {file.blobUrl ? (
-          <Pressable onPress={() => Linking.openURL(file.blobUrl!)}>
+          <Pressable
+            onPress={() => Linking.openURL(file.blobUrl!)}
+            accessibilityRole="link"
+            accessibilityLabel={`View ${file.filename} on GitHub`}
+          >
             <Text style={styles.viewLink}>View</Text>
           </Pressable>
         ) : null}

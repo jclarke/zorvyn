@@ -29,19 +29,27 @@ function webGet(key: string): string | null {
 
 function webSet(key: string, value: string): void {
   try {
-    if (typeof localStorage === 'undefined') return;
+    if (typeof localStorage === 'undefined') {
+      throw new Error('Browser storage is unavailable');
+    }
     localStorage.setItem(key, value);
-  } catch {
-    // private mode / quota
+  } catch (error) {
+    throw new Error('Could not persist credentials in this browser', {
+      cause: error,
+    });
   }
 }
 
 function webRemove(key: string): void {
   try {
-    if (typeof localStorage === 'undefined') return;
+    if (typeof localStorage === 'undefined') {
+      throw new Error('Browser storage is unavailable');
+    }
     localStorage.removeItem(key);
-  } catch {
-    // ignore
+  } catch (error) {
+    throw new Error('Could not remove credentials from this browser', {
+      cause: error,
+    });
   }
 }
 
@@ -70,13 +78,13 @@ export async function setSecret(key: string, value: string): Promise<void> {
   try {
     const available = await SecureStore.isAvailableAsync();
     if (!available) {
-      webSet(key, value);
-      return;
+      throw new Error('Secure storage is unavailable');
     }
     await SecureStore.setItemAsync(key, value, secureStoreOptions);
-  } catch {
-    // Fall back so sign-in still persists when possible
-    webSet(key, value);
+  } catch (error) {
+    throw new Error('Could not securely store credentials on this device', {
+      cause: error,
+    });
   }
 }
 
@@ -88,11 +96,13 @@ export async function deleteSecret(key: string): Promise<void> {
 
   try {
     const available = await SecureStore.isAvailableAsync();
-    if (available) {
-      await SecureStore.deleteItemAsync(key, secureStoreOptions);
+    if (!available) {
+      throw new Error('Secure storage is unavailable');
     }
-  } catch {
-    // ignore
+    await SecureStore.deleteItemAsync(key, secureStoreOptions);
+  } catch (error) {
+    throw new Error('Could not remove credentials from this device', {
+      cause: error,
+    });
   }
-  webRemove(key);
 }

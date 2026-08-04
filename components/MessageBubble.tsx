@@ -119,6 +119,11 @@ function PartBubble({
         <Pressable
           onPress={() => setExpanded((v) => !v)}
           style={styles.thinkingCard}
+          accessibilityRole="button"
+          accessibilityLabel={
+            expanded ? 'Collapse agent reasoning' : 'Expand agent reasoning'
+          }
+          accessibilityState={{ expanded }}
         >
           <View style={styles.meta}>
             <View style={styles.roleRow}>

@@ -406,7 +406,12 @@ export default function SessionChatScreen() {
             <ActivityIndicator size="small" color={colors.accent} />
           ) : null}
           {working && !waking ? (
-            <Pressable onPress={onCancel} style={styles.stopBtn}>
+            <Pressable
+              onPress={onCancel}
+              style={styles.stopBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Stop agent"
+            >
               <Ionicons name="stop-circle" size={18} color={colors.danger} />
               <Text style={styles.stopText}>Stop</Text>
             </Pressable>
@@ -479,7 +484,12 @@ export default function SessionChatScreen() {
                     <Text style={styles.olderText}>Loading earlier…</Text>
                   </>
                 ) : (
-                  <Pressable onPress={() => void loadOlder()} hitSlop={8}>
+                  <Pressable
+                    onPress={() => void loadOlder()}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Load earlier messages"
+                  >
                     <Text style={styles.olderLink}>Load earlier messages</Text>
                   </Pressable>
                 )}
@@ -509,6 +519,12 @@ export default function SessionChatScreen() {
           <Pressable
             onPress={onSend}
             disabled={!draft.trim() || sending || waking}
+            accessibilityRole="button"
+            accessibilityLabel="Send message"
+            accessibilityState={{
+              disabled: !draft.trim() || sending || waking,
+              busy: sending || waking,
+            }}
             style={[
               styles.sendBtn,
               (!draft.trim() || sending || waking) && styles.sendDisabled,
@@ -532,8 +548,14 @@ export default function SessionChatScreen() {
           <Pressable
             style={styles.menuBackdrop}
             onPress={() => setMenuOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close session menu"
           >
-            <Pressable style={styles.menuSheet} onPress={() => {}}>
+            <Pressable
+              style={styles.menuSheet}
+              onPress={() => {}}
+              accessible={false}
+            >
               <Text style={styles.menuTitle}>Session</Text>
               <Pressable
                 style={styles.menuItem}
@@ -595,8 +617,14 @@ export default function SessionChatScreen() {
           <Pressable
             style={styles.modalBackdrop}
             onPress={() => setArchiveConfirmOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close archive confirmation"
           >
-            <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Pressable
+              style={styles.modalCard}
+              onPress={() => {}}
+              accessible={false}
+            >
               <Text style={styles.modalTitle}>Archive session?</Text>
               <Text style={styles.modalBody}>
                 Close this chat tab, stop the agent, and drop queued messages.
@@ -605,12 +633,18 @@ export default function SessionChatScreen() {
                 <Pressable
                   onPress={() => setArchiveConfirmOpen(false)}
                   disabled={archiving}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel archive"
+                  accessibilityState={{ disabled: archiving }}
                 >
                   <Text style={styles.modalCancel}>Cancel</Text>
                 </Pressable>
                 <Pressable
                   onPress={() => void confirmArchive()}
                   disabled={archiving}
+                  accessibilityRole="button"
+                  accessibilityLabel="Archive session"
+                  accessibilityState={{ disabled: archiving, busy: archiving }}
                 >
                   <Text style={styles.modalDanger}>
                     {archiving ? 'Archiving…' : 'Archive'}
@@ -630,11 +664,18 @@ export default function SessionChatScreen() {
           <Pressable
             style={styles.modalBackdrop}
             onPress={() => setRenameOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close rename dialog"
           >
-            <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Pressable
+              style={styles.modalCard}
+              onPress={() => {}}
+              accessible={false}
+            >
               <Text style={styles.modalTitle}>Rename session</Text>
               <TextInput
                 style={styles.modalInput}
+                accessibilityLabel="Session name"
                 value={renameValue}
                 onChangeText={setRenameValue}
                 autoFocus
@@ -642,10 +683,18 @@ export default function SessionChatScreen() {
                 placeholderTextColor={colors.textMuted}
               />
               <View style={styles.modalActions}>
-                <Pressable onPress={() => setRenameOpen(false)}>
+                <Pressable
+                  onPress={() => setRenameOpen(false)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Cancel rename"
+                >
                   <Text style={styles.modalCancel}>Cancel</Text>
                 </Pressable>
-                <Pressable onPress={submitRename}>
+                <Pressable
+                  onPress={submitRename}
+                  accessibilityRole="button"
+                  accessibilityLabel="Save session name"
+                >
                   <Text style={styles.modalSave}>Save</Text>
                 </Pressable>
               </View>

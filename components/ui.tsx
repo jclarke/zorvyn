@@ -27,15 +27,19 @@ export function Card({
   children,
   style,
   onPress,
+  accessibilityLabel,
 }: {
   children: React.ReactNode;
   style?: ViewStyle;
   onPress?: () => void;
+  accessibilityLabel?: string;
 }) {
   if (onPress) {
     return (
       <Pressable
         onPress={onPress}
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
         style={({ pressed }) => [
           styles.card,
           pressed && styles.cardPressed,
@@ -113,6 +117,9 @@ export function Button({
     <Pressable
       onPress={onPress}
       disabled={isDisabled}
+      accessibilityRole="button"
+      accessibilityLabel={title}
+      accessibilityState={{ disabled: isDisabled, busy: Boolean(loading) }}
       style={({ pressed }) => [
         styles.button,
         variant === 'primary' && styles.buttonPrimary,
@@ -173,6 +180,7 @@ export function Input({
     <View style={[{ gap: spacing.sm }, containerStyle]}>
       {label ? <Label>{label}</Label> : null}
       <TextInput
+        accessibilityLabel={props.accessibilityLabel || label}
         placeholderTextColor={colors.textMuted}
         style={[styles.input, props.multiline && styles.inputMultiline]}
         {...props}
@@ -278,7 +286,11 @@ export function ErrorBanner({
       <Ionicons name="alert-circle" size={18} color={colors.danger} />
       <Text style={styles.errorText}>{message}</Text>
       {onRetry ? (
-        <Pressable onPress={onRetry}>
+        <Pressable
+          onPress={onRetry}
+          accessibilityRole="button"
+          accessibilityLabel="Retry"
+        >
           <Text style={styles.retryText}>Retry</Text>
         </Pressable>
       ) : null}
@@ -302,7 +314,7 @@ export function Row({
   icon?: keyof typeof Ionicons.glyphMap;
 }) {
   return (
-    <Card onPress={onPress}>
+    <Card onPress={onPress} accessibilityLabel={onPress ? title : undefined}>
       <View style={styles.row}>
         {icon ? (
           <View style={styles.rowIcon}>
@@ -345,6 +357,9 @@ export function Chip({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ selected: Boolean(selected) }}
       style={[styles.chip, selected && styles.chipSelected]}
     >
       <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
@@ -367,7 +382,11 @@ export function SectionHeader({
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>{title}</Text>
       {actionLabel && onAction ? (
-        <Pressable onPress={onAction}>
+        <Pressable
+          onPress={onAction}
+          accessibilityRole="button"
+          accessibilityLabel={actionLabel}
+        >
           <Text style={styles.sectionAction}>{actionLabel}</Text>
         </Pressable>
       ) : null}

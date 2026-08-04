@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -58,6 +58,7 @@ export default function SearchScreen() {
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
+  const latestRequest = useRef(0);
 
   const filters: SearchFilters = useMemo(
     () => ({ text, range, workspace }),
@@ -67,6 +68,7 @@ export default function SearchScreen() {
   const runSearch = useCallback(
     async (next?: SearchFilters) => {
       if (!client) return;
+      const requestId = ++latestRequest.current;
       const f = next ?? filters;
       Keyboard.dismiss();
       setLoading(true);
@@ -75,13 +77,15 @@ export default function SearchScreen() {
       try {
         const sql = buildTranscriptSearchSql(f);
         const res = await client.runSql({ query: sql });
+        if (requestId !== latestRequest.current) return;
         setHits(res.rows.map(rowToHit));
         setTruncated(res.truncated);
       } catch (e) {
+        if (requestId !== latestRequest.current) return;
         setHits(null);
         setError(e instanceof Error ? e.message : 'Search failed');
       } finally {
-        setLoading(false);
+        if (requestId === latestRequest.current) setLoading(false);
       }
     },
     [client, filters],
@@ -159,6 +163,7 @@ export default function SearchScreen() {
               />
               <TextInput
                 style={styles.searchInput}
+                accessibilityLabel="Search transcripts"
                 value={text}
                 onChangeText={setText}
                 placeholder="Search transcripts, titles, workspaces…"
@@ -176,6 +181,8 @@ export default function SearchScreen() {
                     void runSearch({ text: '', range, workspace });
                   }}
                   hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Clear search"
                 >
                   <Ionicons
                     name="close-circle"
@@ -188,6 +195,9 @@ export default function SearchScreen() {
                 onPress={() => runSearch()}
                 style={styles.searchBtn}
                 disabled={loading}
+                accessibilityRole="button"
+                accessibilityLabel="Search"
+                accessibilityState={{ disabled: loading, busy: loading }}
               >
                 {loading ? (
                   <ActivityIndicator color={colors.textInverse} size="small" />
@@ -238,6 +248,8 @@ export default function SearchScreen() {
                   key={look.id}
                   style={styles.quickCard}
                   onPress={() => applyQuickLook(look.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${look.title}. ${look.subtitle}`}
                 >
                   <Ionicons
                     name={look.icon}
