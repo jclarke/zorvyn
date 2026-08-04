@@ -89,11 +89,11 @@ export default function WorkspaceChangesScreen() {
 
   const loadAgentActivity = useCallback(async (): Promise<{
     repoUrl: string | null;
-    linkedPullNumbers: number[];
+    linkedPulls: LinkedPull[];
     branchCandidates: string[];
   }> => {
     if (!client || !workspaceId) {
-      return { repoUrl: null, linkedPullNumbers: [], branchCandidates: [] };
+      return { repoUrl: null, linkedPulls: [], branchCandidates: [] };
     }
 
     const sessions = await client.listWorkspaceSessions(workspaceId, {
@@ -148,8 +148,8 @@ export default function WorkspaceChangesScreen() {
       setRepoUrl(foundRepo);
     }
 
-    const pullNumbers = Array.from(
-      new Set([...messageHints.pullNumbers, ...sqlHints.pullNumbers]),
+    const pullByUrl = new Map(
+      [...messageHints.pulls, ...sqlHints.pulls].map((pull) => [pull.url, pull]),
     );
     const branchCandidates = Array.from(
       new Set([...sqlHints.branches, ...messageHints.branches]),
@@ -159,7 +159,7 @@ export default function WorkspaceChangesScreen() {
 
     return {
       repoUrl: foundRepo,
-      linkedPullNumbers: pullNumbers,
+      linkedPulls: Array.from(pullByUrl.values()),
       branchCandidates,
     };
   }, [client, workspaceId]);
@@ -168,7 +168,7 @@ export default function WorkspaceChangesScreen() {
     async (
       remote: string | null,
       token: string | null,
-      linkedPullNumbers: number[],
+      linkedPulls: LinkedPull[],
       branchCandidates: string[],
     ) => {
       const repo = parseGithubRemote(remote);
@@ -201,7 +201,7 @@ export default function WorkspaceChangesScreen() {
           branch: routeBranch,
           branchCandidates,
           workspaceName: name || routeHint || undefined,
-          linkedPullNumbers,
+          linkedPulls,
           token,
         });
         setGithubPulls(pulls);
@@ -245,7 +245,7 @@ export default function WorkspaceChangesScreen() {
         await loadGithub(
           activity.repoUrl,
           token,
-          activity.linkedPullNumbers,
+          activity.linkedPulls,
           activity.branchCandidates,
         );
       } catch (e) {

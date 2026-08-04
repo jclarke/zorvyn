@@ -1,7 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useCallback, useLayoutEffect, useState } from 'react';
 import {
-  Alert,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -21,6 +20,7 @@ import {
   StatusDot,
 } from '@/components/ui';
 import { useClient } from '@/lib/auth';
+import { confirmAction, showMessage } from '@/lib/dialogs';
 import type { Session, WorkspaceStatus, WorkspaceSummary } from '@/lib/types';
 import { colors, spacing } from '@/lib/theme';
 
@@ -93,39 +93,35 @@ export default function WorkspaceDetailScreen() {
       setRenaming(false);
       navigation.setOptions({ title: w.name });
     } catch (e) {
-      Alert.alert('Rename failed', e instanceof Error ? e.message : 'Error');
+      showMessage('Rename failed', e instanceof Error ? e.message : 'Error');
     } finally {
       setActionBusy(false);
     }
   }
 
-  function onArchive() {
+  async function onArchive() {
     if (!client) return;
-    Alert.alert(
-      'Archive workspace',
-      'Stop the sandbox and hide this workspace? It can be restored later from desktop.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Archive',
-          style: 'destructive',
-          onPress: async () => {
-            setActionBusy(true);
-            try {
-              await client.archiveWorkspace(id);
-              await load(true);
-            } catch (e) {
-              Alert.alert(
-                'Archive failed',
-                e instanceof Error ? e.message : 'Error',
-              );
-            } finally {
-              setActionBusy(false);
-            }
-          },
-        },
-      ],
-    );
+    const confirmed = await confirmAction({
+      title: 'Archive workspace',
+      message:
+        'Stop the sandbox and hide this workspace? It can be restored later from desktop.',
+      confirmLabel: 'Archive',
+      destructive: true,
+    });
+    if (!confirmed) return;
+
+    setActionBusy(true);
+    try {
+      await client.archiveWorkspace(id);
+      await load(true);
+    } catch (e) {
+      showMessage(
+        'Archive failed',
+        e instanceof Error ? e.message : 'Error',
+      );
+    } finally {
+      setActionBusy(false);
+    }
   }
 
   if (!client || (loading && !workspace)) {
@@ -233,7 +229,7 @@ export default function WorkspaceDetailScreen() {
                 title="Archive"
                 variant="danger"
                 icon="archive-outline"
-                onPress={onArchive}
+                onPress={() => void onArchive()}
                 disabled={actionBusy}
                 style={{ flex: 1 }}
               />

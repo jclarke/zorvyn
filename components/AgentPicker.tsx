@@ -5,7 +5,7 @@ import {
   AGENTS,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
-  EFFORTS_BY_AGENT,
+  effortsForAgentModel,
   MODELS_BY_AGENT,
   supportsFastMode,
 } from '@/lib/models';
@@ -29,6 +29,7 @@ type Props = {
   showName?: boolean;
   showSessionName?: boolean;
   showBranch?: boolean;
+  showFastMode?: boolean;
   nameLabel?: string;
 };
 
@@ -38,11 +39,12 @@ export function AgentPicker({
   showName,
   showSessionName,
   showBranch,
+  showFastMode = true,
   nameLabel = 'Workspace name',
 }: Props) {
   const models = MODELS_BY_AGENT[value.agent] || [];
-  const efforts = EFFORTS_BY_AGENT[value.agent] || [];
-  const canFast = supportsFastMode(value.model);
+  const efforts = effortsForAgentModel(value.agent, value.model);
+  const canFast = showFastMode && supportsFastMode(value.model);
 
   function setAgent(agent: Agent) {
     const model = DEFAULT_MODEL[agent];
@@ -115,13 +117,21 @@ export function AgentPicker({
                   key={m}
                   label={m}
                   selected={value.model === m}
-                  onPress={() =>
+                  onPress={() => {
+                    const nextEfforts = effortsForAgentModel(value.agent, m);
                     onChange({
                       ...value,
                       model: m,
-                      fastMode: supportsFastMode(m) ? value.fastMode : false,
-                    })
-                  }
+                      effort:
+                        value.effort && nextEfforts.includes(value.effort)
+                          ? value.effort
+                          : DEFAULT_EFFORT[value.agent],
+                      fastMode:
+                        showFastMode && supportsFastMode(m)
+                          ? value.fastMode
+                          : false,
+                    });
+                  }}
                 />
               ))}
             </View>

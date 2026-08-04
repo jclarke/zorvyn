@@ -51,6 +51,24 @@ export const EFFORTS_BY_AGENT: Record<Agent, Effort[]> = {
   acp: [],
 };
 
+const CODEX_BASE_EFFORTS: Effort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
+const CODEX_MAX_MODELS = new Set<Model>([
+  'gpt-5.6-sol',
+  'gpt-5.6-terra',
+  'gpt-5.6-luna',
+]);
+const CODEX_ULTRA_MODELS = new Set<Model>(['gpt-5.6-sol', 'gpt-5.6-terra']);
+
+/** Effort values accepted by the current Conductor API for this model. */
+export function effortsForAgentModel(agent: Agent, model?: Model): Effort[] {
+  if (agent !== 'codex') return EFFORTS_BY_AGENT[agent] || [];
+
+  const efforts = [...CODEX_BASE_EFFORTS];
+  if (model && CODEX_MAX_MODELS.has(model)) efforts.push('max');
+  if (model && CODEX_ULTRA_MODELS.has(model)) efforts.push('ultra');
+  return efforts;
+}
+
 export const DEFAULT_EFFORT: Record<Agent, Effort | undefined> = {
   claude: 'high',
   codex: 'high',
@@ -87,4 +105,3 @@ export function supportsFastMode(model?: Model): boolean {
   if (!model) return false;
   return FAST_MODE_MODELS.includes(model);
 }
-

@@ -1,245 +1,112 @@
-import React, { useMemo } from 'react';
-import { StyleSheet, View, type TextStyle, type ViewStyle } from 'react-native';
-import Markdown from 'react-native-markdown-display';
+import React, { useMemo, type ReactNode } from 'react';
+import {
+  Linking,
+  StyleSheet,
+  Text,
+  View,
+  type TextStyle,
+} from 'react-native';
 
 import { colors, radius, spacing } from '@/lib/theme';
+import { parseMarkdownBlocks } from '@/lib/markdown';
 
 export type MarkdownVariant = 'agent' | 'user' | 'error' | 'thinking';
 
-type MdStyles = Record<string, TextStyle | ViewStyle>;
+const INLINE_TOKEN = /(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\)|`[^`\n]+`|\*\*[^*\n]+\*\*|__[^_\n]+__|\*[^*\n]+\*|_[^_\n]+_)/g;
 
-function buildStyles(variant: MarkdownVariant): MdStyles {
-  const isUser = variant === 'user';
-  const isError = variant === 'error';
-  const isThinking = variant === 'thinking';
+function inlineNodes(text: string, palette: Palette): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  let cursor = 0;
+  let key = 0;
 
-  const fg = isUser
-    ? colors.userText
-    : isError
-      ? colors.danger
-      : isThinking
-        ? colors.textSecondary
-        : colors.text;
+  for (const match of text.matchAll(INLINE_TOKEN)) {
+    const index = match.index ?? 0;
+    if (index > cursor) nodes.push(text.slice(cursor, index));
+    const token = match[0];
+    const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
 
-  const secondary = isUser ? colors.userTextSecondary : colors.textSecondary;
-  const codeBg = isUser ? 'rgba(6,18,31,0.28)' : colors.bgElevated;
-  const codeFg = isUser ? colors.userText : colors.accent;
-  const border = isUser ? 'rgba(186,230,253,0.32)' : colors.border;
-  const link = isUser ? colors.userText : colors.accent;
-  const quoteBorder = isUser ? colors.userTextSecondary : colors.accent;
+    if (link) {
+      const url = link[2];
+      nodes.push(
+        <Text
+          key={`link-${key}`}
+          style={[{ color: palette.link }, styles.link]}
+          onPress={() => void Linking.openURL(url)}
+          accessibilityRole="link"
+        >
+          {link[1]}
+        </Text>,
+      );
+    } else if (token.startsWith('`')) {
+      nodes.push(
+        <Text
+          key={`code-${key}`}
+          style={[
+            styles.inlineCode,
+            { color: palette.codeFg, backgroundColor: palette.codeBg },
+          ]}
+        >
+          {token.slice(1, -1)}
+        </Text>,
+      );
+    } else if (token.startsWith('**') || token.startsWith('__')) {
+      nodes.push(
+        <Text key={`strong-${key}`} style={styles.strong}>
+          {token.slice(2, -2)}
+        </Text>,
+      );
+    } else {
+      nodes.push(
+        <Text key={`em-${key}`} style={styles.em}>
+          {token.slice(1, -1)}
+        </Text>,
+      );
+    }
+    cursor = index + token.length;
+    key += 1;
+  }
 
-  const fontSize = isThinking ? 13 : 15;
-  const lineHeight = isThinking ? 18 : 21;
+  if (cursor < text.length) nodes.push(text.slice(cursor));
+  return nodes;
+}
 
+type Palette = {
+  fg: string;
+  secondary: string;
+  link: string;
+  codeFg: string;
+  codeBg: string;
+  border: string;
+  quoteBg: string;
+  fontSize: number;
+  lineHeight: number;
+  italic: boolean;
+};
+
+function paletteFor(variant: MarkdownVariant): Palette {
+  const user = variant === 'user';
+  const error = variant === 'error';
+  const thinking = variant === 'thinking';
   return {
-    body: {
-      color: fg,
-      fontSize,
-      lineHeight,
-      fontStyle: isThinking ? 'italic' : 'normal',
-    },
-    text: {
-      color: fg,
-      fontSize,
-      lineHeight,
-    },
-    paragraph: {
-      marginTop: 0,
-      marginBottom: isThinking ? 4 : 6,
-      flexWrap: 'wrap',
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      justifyContent: 'flex-start',
-      width: '100%',
-    },
-    // Keep text nodes wrapping inside the bubble width
-    textgroup: {
-      flexShrink: 1,
-    },
-    strong: {
-      fontWeight: '700',
-      color: fg,
-    },
-    em: {
-      fontStyle: 'italic',
-      color: fg,
-    },
-    s: {
-      textDecorationLine: 'line-through',
-      color: secondary,
-    },
-    link: {
-      color: link,
-      textDecorationLine: 'underline',
-    },
-    heading1: {
-      color: fg,
-      fontSize: 17,
-      fontWeight: '700',
-      marginTop: 2,
-      marginBottom: 6,
-      lineHeight: 22,
-    },
-    heading2: {
-      color: fg,
-      fontSize: 16,
-      fontWeight: '700',
-      marginTop: 2,
-      marginBottom: 5,
-      lineHeight: 21,
-    },
-    heading3: {
-      color: fg,
-      fontSize: 15,
-      fontWeight: '700',
-      marginTop: 2,
-      marginBottom: 4,
-      lineHeight: 20,
-    },
-    heading4: {
-      color: fg,
-      fontSize: 14,
-      fontWeight: '700',
-      marginBottom: 4,
-    },
-    heading5: {
-      color: fg,
-      fontSize: 13,
-      fontWeight: '700',
-      marginBottom: 3,
-    },
-    heading6: {
-      color: secondary,
-      fontSize: 13,
-      fontWeight: '700',
-      marginBottom: 3,
-    },
-    bullet_list: {
-      marginBottom: 6,
-      marginTop: 0,
-      width: '100%',
-    },
-    ordered_list: {
-      marginBottom: 6,
-      marginTop: 0,
-      width: '100%',
-    },
-    list_item: {
-      marginBottom: 3,
-      flexDirection: 'row',
-      alignItems: 'flex-start',
-      width: '100%',
-    },
-    bullet_list_icon: {
-      color: fg,
-      fontSize: 14,
-      lineHeight: 21,
-      marginLeft: 0,
-      marginRight: 6,
-      marginTop: 0,
-    },
-    ordered_list_icon: {
-      color: secondary,
-      fontSize: 13,
-      lineHeight: 21,
-      marginLeft: 0,
-      marginRight: 6,
-    },
-    bullet_list_content: {
-      flex: 1,
-      flexShrink: 1,
-    },
-    ordered_list_content: {
-      flex: 1,
-      flexShrink: 1,
-    },
-    code_inline: {
-      fontFamily: 'SpaceMono',
-      backgroundColor: codeBg,
-      color: codeFg,
-      fontSize: 12,
-      paddingHorizontal: 4,
-      paddingVertical: 1,
-      borderRadius: 4,
-    },
-    fence: {
-      fontFamily: 'SpaceMono',
-      backgroundColor: codeBg,
-      color: isUser ? colors.userText : colors.textSecondary,
-      fontSize: 11,
-      lineHeight: 16,
-      padding: spacing.sm,
-      borderRadius: radius.sm,
-      marginVertical: spacing.sm,
-      borderWidth: 1,
-      borderColor: border,
-      width: '100%',
-    },
-    code_block: {
-      fontFamily: 'SpaceMono',
-      backgroundColor: codeBg,
-      color: isUser ? colors.userText : colors.textSecondary,
-      fontSize: 11,
-      lineHeight: 16,
-      padding: spacing.sm,
-      borderRadius: radius.sm,
-      marginVertical: spacing.sm,
-      width: '100%',
-    },
-    blockquote: {
-      borderLeftWidth: 3,
-      borderLeftColor: quoteBorder,
-      paddingLeft: spacing.sm,
-      marginVertical: spacing.sm,
-      backgroundColor: isUser ? 'rgba(6,18,31,0.16)' : colors.bgElevated,
-      paddingVertical: spacing.sm,
-      paddingRight: spacing.sm,
-      borderRadius: radius.sm,
-      width: '100%',
-    },
-    hr: {
-      backgroundColor: border,
-      height: StyleSheet.hairlineWidth,
-      marginVertical: spacing.md,
-    },
-    table: {
-      borderWidth: 1,
-      borderColor: border,
-      borderRadius: radius.sm,
-      marginVertical: spacing.sm,
-      width: '100%',
-    },
-    thead: {
-      backgroundColor: isUser ? 'rgba(6,18,31,0.18)' : colors.bgElevated,
-    },
-    th: {
-      padding: 6,
-      fontWeight: '700',
-      color: fg,
-      fontSize: 12,
-      flex: 1,
-      flexWrap: 'wrap',
-    },
-    td: {
-      padding: 6,
-      color: secondary,
-      fontSize: 12,
-      flex: 1,
-      flexWrap: 'wrap',
-    },
-    tr: {
-      borderBottomWidth: StyleSheet.hairlineWidth,
-      borderColor: border,
-      flexDirection: 'row',
-      flexWrap: 'wrap',
-    },
+    fg: user
+      ? colors.userText
+      : error
+        ? colors.danger
+        : thinking
+          ? colors.textSecondary
+          : colors.text,
+    secondary: user ? colors.userTextSecondary : colors.textSecondary,
+    link: user ? colors.userText : colors.accent,
+    codeFg: user ? colors.userText : colors.accent,
+    codeBg: user ? 'rgba(6,18,31,0.28)' : colors.bgElevated,
+    border: user ? 'rgba(186,230,253,0.32)' : colors.border,
+    quoteBg: user ? 'rgba(6,18,31,0.16)' : colors.bgElevated,
+    fontSize: thinking ? 13 : 15,
+    lineHeight: thinking ? 18 : 21,
+    italic: thinking,
   };
 }
 
-/**
- * Renders markdown inside chat bubbles without nested ScrollViews
- * (those break FlatList row height and produce empty giant bubbles).
- */
 export function MarkdownBody({
   children,
   variant = 'agent',
@@ -247,27 +114,113 @@ export function MarkdownBody({
   children: string;
   variant?: MarkdownVariant;
 }) {
-  const mdStyles = useMemo(() => buildStyles(variant), [variant]);
-  const content = (children ?? '').trim();
+  const palette = useMemo(() => paletteFor(variant), [variant]);
+  const blocks = useMemo(() => parseMarkdownBlocks(children), [children]);
 
-  if (!content) {
-    return null;
-  }
+  if (!blocks.length) return null;
+
+  const baseText: TextStyle = {
+    color: palette.fg,
+    fontSize: palette.fontSize,
+    lineHeight: palette.lineHeight,
+    fontStyle: palette.italic ? 'italic' : 'normal',
+  };
 
   return (
     <View style={styles.wrap}>
-      <Markdown style={mdStyles} mergeStyle>
-        {content}
-      </Markdown>
+      {blocks.map((block) => {
+        if (block.kind === 'blank') return <View key={block.key} style={styles.blank} />;
+        if (block.kind === 'code') {
+          return (
+            <Text
+              key={block.key}
+              selectable
+              style={[
+                styles.codeBlock,
+                { color: palette.secondary, backgroundColor: palette.codeBg, borderColor: palette.border },
+              ]}
+            >
+              {block.text}
+            </Text>
+          );
+        }
+        if (block.kind === 'quote') {
+          return (
+            <View
+              key={block.key}
+              style={[
+                styles.quote,
+                { backgroundColor: palette.quoteBg, borderLeftColor: palette.link },
+              ]}
+            >
+              <Text selectable style={baseText}>{inlineNodes(block.text, palette)}</Text>
+            </View>
+          );
+        }
+        if (block.kind === 'list') {
+          return (
+            <View key={block.key} style={styles.listRow}>
+              <Text style={[baseText, styles.marker]}>{block.marker}</Text>
+              <Text selectable style={[baseText, styles.listText]}>
+                {inlineNodes(block.text, palette)}
+              </Text>
+            </View>
+          );
+        }
+        if (block.kind === 'heading') {
+          const size = Math.max(palette.fontSize, 19 - block.level);
+          return (
+            <Text
+              key={block.key}
+              selectable
+              style={[baseText, styles.heading, { fontSize: size, lineHeight: size + 5 }]}
+            >
+              {inlineNodes(block.text, palette)}
+            </Text>
+          );
+        }
+        return (
+          <Text key={block.key} selectable style={[baseText, styles.paragraph]}>
+            {inlineNodes(block.text, palette)}
+          </Text>
+        );
+      })}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: {
+  wrap: { width: '100%', maxWidth: '100%', flexShrink: 1 },
+  blank: { height: 6 },
+  paragraph: { flexShrink: 1 },
+  heading: { fontWeight: '700', marginBottom: 3 },
+  listRow: { flexDirection: 'row', alignItems: 'flex-start', width: '100%' },
+  marker: { width: 24 },
+  listText: { flex: 1, flexShrink: 1 },
+  quote: {
+    borderLeftWidth: 3,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    marginVertical: 3,
+  },
+  codeBlock: {
     width: '100%',
-    maxWidth: '100%',
-    overflow: 'hidden',
-    flexShrink: 1,
+    fontFamily: 'SpaceMono',
+    fontSize: 11,
+    lineHeight: 16,
+    padding: spacing.sm,
+    marginVertical: 3,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+  },
+  strong: { fontWeight: '700' },
+  em: { fontStyle: 'italic' },
+  link: { textDecorationLine: 'underline' },
+  inlineCode: {
+    fontFamily: 'SpaceMono',
+    fontSize: 12,
+    paddingHorizontal: 3,
+    borderRadius: 3,
   },
 });

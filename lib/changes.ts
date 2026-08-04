@@ -20,6 +20,8 @@ export type FileChange = {
 export type LinkedPull = {
   url: string;
   number?: number;
+  owner?: string;
+  repo?: string;
   label: string;
 };
 
@@ -191,6 +193,8 @@ export function extractLinkedResources(messages: Message[]): {
       pullMap.set(url, {
         url,
         number,
+        owner: match[1],
+        repo: match[2],
         label: `PR #${number}`,
       });
     }
@@ -211,6 +215,7 @@ export function extractLinkedResources(messages: Message[]): {
 /** Hints scraped from chat/SQL transcript text for PR matching. */
 export type GitHints = {
   pullNumbers: number[];
+  pulls: LinkedPull[];
   /** Likely git head refs (city names, feature branches, etc.) */
   branches: string[];
   repoUrls: string[];
@@ -287,6 +292,7 @@ function isPlausibleBranch(ref: string): boolean {
  */
 export function extractGitHintsFromText(...texts: (string | null | undefined)[]): GitHints {
   const pullNumbers = new Set<number>();
+  const pulls = new Map<string, LinkedPull>();
   const branches: string[] = [];
   const seenBranch = new Set<string>();
   const repoUrls = new Set<string>();
@@ -305,7 +311,16 @@ export function extractGitHintsFromText(...texts: (string | null | undefined)[])
 
     for (const match of text.matchAll(PR_URL_RE)) {
       const n = Number(match[3]);
-      if (Number.isFinite(n) && n > 0) pullNumbers.add(n);
+      if (Number.isFinite(n) && n > 0) {
+        pullNumbers.add(n);
+        pulls.set(match[0], {
+          url: match[0],
+          number: n,
+          owner: match[1],
+          repo: match[2],
+          label: `PR #${n}`,
+        });
+      }
     }
 
     for (const re of BRANCH_CONTEXT_RES) {
@@ -322,6 +337,7 @@ export function extractGitHintsFromText(...texts: (string | null | undefined)[])
 
   return {
     pullNumbers: Array.from(pullNumbers),
+    pulls: Array.from(pulls.values()),
     branches,
     repoUrls: Array.from(repoUrls),
   };
@@ -333,11 +349,14 @@ export function extractGitHintsFromMessages(messages: Message[]): GitHints {
   const fromText = extractGitHintsFromText(...texts);
   const links = extractLinkedResources(messages);
   const pullNumbers = new Set(fromText.pullNumbers);
+  const pulls = new Map(fromText.pulls.map((pull) => [pull.url, pull]));
   for (const p of links.pulls) {
     if (typeof p.number === 'number') pullNumbers.add(p.number);
+    pulls.set(p.url, p);
   }
   return {
     pullNumbers: Array.from(pullNumbers),
+    pulls: Array.from(pulls.values()),
     branches: fromText.branches,
     repoUrls: fromText.repoUrls,
   };

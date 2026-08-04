@@ -1,4 +1,8 @@
 import { deleteSecret, getSecret, setSecret } from './storage';
+import type { LinkedPull } from './changes';
+import { linkedPullNumbersForRepo } from './github-refs';
+
+export { linkedPullNumbersForRepo } from './github-refs';
 
 const GITHUB_TOKEN_KEY = 'github_pat';
 
@@ -264,7 +268,7 @@ export async function findPullsForWorkspace(
     /** Extra head refs from transcripts (e.g. Conductor city-name branches). */
     branchCandidates?: string[] | null;
     workspaceName?: string | null;
-    linkedPullNumbers?: number[];
+    linkedPulls?: LinkedPull[];
     token: string | null;
   },
 ): Promise<GithubPull[]> {
@@ -276,8 +280,8 @@ export async function findPullsForWorkspace(
     if (!found.has(p.number)) found.set(p.number, p);
   };
 
-  // 0) Linked PR numbers from transcripts / chat — most reliable
-  for (const n of options.linkedPullNumbers || []) {
+  // 0) Linked PRs from transcripts / chat — only when the URL points to this repo.
+  for (const n of linkedPullNumbersForRepo(repo, options.linkedPulls || [])) {
     try {
       const p = await githubFetch<GhPullRaw>(
         `/repos/${repo.owner}/${repo.repo}/pulls/${n}`,

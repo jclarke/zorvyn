@@ -1,7 +1,6 @@
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import React, { useLayoutEffect, useState } from 'react';
 import {
-  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -101,31 +100,13 @@ export default function CreateWorkspaceScreen() {
 
       const res = await client.createWorkspace(body);
 
-      Alert.alert(
-        'Workspace created',
-        'Open the chat session to start vibe coding.',
-        [
-          {
-            text: 'Open chat',
-            onPress: () =>
-              router.replace({
-                pathname: '/session/[id]',
-                params: {
-                  id: res.sessionId,
-                  workspaceId: res.workspaceId,
-                },
-              }),
-          },
-          {
-            text: 'Workspace',
-            onPress: () =>
-              router.replace({
-                pathname: '/workspace/[id]',
-                params: { id: res.workspaceId },
-              }),
-          },
-        ],
-      );
+      router.replace({
+        pathname: '/session/[id]',
+        params: {
+          id: res.sessionId,
+          workspaceId: res.workspaceId,
+        },
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create workspace');
     } finally {
@@ -194,6 +175,7 @@ export default function CreateWorkspaceScreen() {
             showName
             showSessionName
             showBranch
+            showFastMode={false}
           />
 
           <Button
