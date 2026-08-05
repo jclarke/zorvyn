@@ -1,6 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import React, { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 
 import { MarkdownBody } from '@/components/MarkdownBody';
 import { formatRelativeTime } from '@/lib/format';
@@ -9,6 +15,7 @@ import {
   type ParsedMessage,
   type TranscriptKind,
   type TranscriptPart,
+  type TranscriptRow,
 } from '@/lib/transcript';
 import { colors, radius, spacing } from '@/lib/theme';
 
@@ -25,6 +32,7 @@ const ICON_MAP: Record<
   checkmark: 'checkmark-circle-outline',
 };
 
+/** Renders a single API message (parts not yet grouped into tool boxes). */
 export function MessageBubble({ message }: { message: ParsedMessage }) {
   return (
     <View style={styles.group}>
@@ -39,6 +47,187 @@ export function MessageBubble({ message }: { message: ParsedMessage }) {
   );
 }
 
+/** Renders one flattened transcript row (part or tool group). */
+export function TranscriptRowItem({ row }: { row: TranscriptRow }) {
+  if (row.kind === 'tools') {
+    return <ToolGroup parts={row.parts} receivedAt={row.receivedAt} />;
+  }
+  return <PartBubble part={row.part} receivedAt={row.receivedAt} />;
+}
+
+/**
+ * Consecutive tool traffic collapses into one summary line, the way Conductor
+ * / ez-rocket-ship render a turn — otherwise a single answer is buried under
+ * dozens of bash calls and their output.
+ */
+function ToolGroup({
+  parts,
+  receivedAt,
+}: {
+  parts: TranscriptPart[];
+  receivedAt?: string;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const callCount = parts.filter((p) => p.kind === 'tool').length;
+  const resultCount = parts.length - callCount;
+  const errored = parts.some((p) => p.icon === 'alert');
+
+  const summary = [
+    callCount > 0
+      ? `${callCount} tool call${callCount === 1 ? '' : 's'}`
+      : null,
+    resultCount > 0
+      ? `${resultCount} result${resultCount === 1 ? '' : 's'}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(', ');
+
+  const previewNames = parts
+    .filter((p) => p.kind === 'tool')
+    .map((p) => p.text)
+    .slice(0, 4)
+    .join(', ');
+
+  return (
+    <View style={styles.toolGroupWrap}>
+      <View
+        style={[
+          styles.toolGroup,
+          errored && styles.toolGroupError,
+        ]}
+      >
+        <Pressable
+          onPress={() => setOpen((v) => !v)}
+          style={({ pressed }) => [
+            styles.toolGroupHeader,
+            pressed && styles.toolGroupHeaderPressed,
+          ]}
+          accessibilityRole="button"
+          accessibilityLabel={
+            open ? `Collapse ${summary}` : `Expand ${summary}`
+          }
+          accessibilityState={{ expanded: open }}
+        >
+          <Ionicons
+            name={open ? 'chevron-down' : 'chevron-forward'}
+            size={14}
+            color={colors.textMuted}
+          />
+          <Text style={styles.toolGroupSummary} numberOfLines={1}>
+            {summary}
+          </Text>
+          {errored ? (
+            <Text style={styles.toolGroupErrorLabel}>· error</Text>
+          ) : null}
+          {!open && previewNames ? (
+            <Text style={styles.toolGroupPreview} numberOfLines={1}>
+              {previewNames}
+            </Text>
+          ) : null}
+          {receivedAt && !open ? (
+            <Text style={styles.toolGroupTime}>
+              {formatRelativeTime(receivedAt)}
+            </Text>
+          ) : null}
+        </Pressable>
+
+        {open ? (
+          <View style={styles.toolGroupBody}>
+            {parts.map((part, index) => (
+              <ToolPart key={index} part={part} />
+            ))}
+          </View>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function ToolPart({ part }: { part: TranscriptPart }) {
+  const [open, setOpen] = useState(false);
+  const isResult = part.kind === 'tool_result';
+  const isError = part.icon === 'alert';
+  const expandable = Boolean(part.detail);
+
+  return (
+    <View
+      style={[
+        styles.toolPart,
+        isError && styles.toolPartError,
+        isResult && !isError && styles.toolPartResult,
+        !isResult && !isError && styles.toolPartCall,
+      ]}
+    >
+      <Pressable
+        onPress={() => expandable && setOpen((v) => !v)}
+        disabled={!expandable}
+        style={({ pressed }) => [
+          styles.toolPartHeader,
+          expandable && pressed && styles.toolGroupHeaderPressed,
+        ]}
+        accessibilityRole={expandable ? 'button' : undefined}
+        accessibilityState={expandable ? { expanded: open } : undefined}
+        accessibilityLabel={
+          expandable
+            ? open
+              ? `Collapse ${part.text} detail`
+              : `Expand ${part.text} detail`
+            : part.text
+        }
+      >
+        {expandable ? (
+          <Ionicons
+            name={open ? 'chevron-down' : 'chevron-forward'}
+            size={12}
+            color={colors.textMuted}
+          />
+        ) : (
+          <View style={styles.toolPartChevronSpacer} />
+        )}
+        <View
+          style={[
+            styles.toolPartBadge,
+            isError && styles.toolPartBadgeError,
+            isResult && !isError && styles.toolPartBadgeResult,
+            !isResult && !isError && styles.toolPartBadgeCall,
+          ]}
+        >
+          <Text
+            style={[
+              styles.toolPartBadgeText,
+              isError && { color: colors.danger },
+              isResult && !isError && { color: colors.textMuted },
+              !isResult && !isError && { color: colors.warning },
+            ]}
+          >
+            {isResult ? 'Result' : 'Tool'}
+          </Text>
+        </View>
+        <Text
+          style={[styles.toolPartName, isError && { color: colors.danger }]}
+          numberOfLines={1}
+        >
+          {part.text}
+        </Text>
+      </Pressable>
+
+      {open && part.detail ? (
+        <ScrollView
+          style={styles.toolPartDetailScroll}
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.toolPartDetail} selectable>
+            {part.detail}
+          </Text>
+        </ScrollView>
+      ) : null}
+    </View>
+  );
+}
+
 function PartBubble({
   part,
   receivedAt,
@@ -48,7 +237,6 @@ function PartBubble({
 }) {
   const [expanded, setExpanded] = useState(!part.collapsible);
   const isUser = part.kind === 'user';
-  const isTool = part.kind === 'tool' || part.kind === 'tool_result';
   const isStatus = part.kind === 'status' || part.kind === 'meta';
   const isError = part.kind === 'error';
   const isThinking = part.kind === 'thinking';
@@ -73,40 +261,11 @@ function PartBubble({
     );
   }
 
-  if (isTool) {
+  // Standalone tool parts (when not grouped via TranscriptRowItem)
+  if (part.kind === 'tool' || part.kind === 'tool_result') {
     return (
-      <View style={styles.toolWrap}>
-        <View style={[styles.toolCard, isError && styles.toolError]}>
-          <View style={styles.toolHeader}>
-            <Ionicons
-              name={
-                part.icon
-                  ? ICON_MAP[part.icon]
-                  : part.kind === 'tool_result'
-                    ? 'return-down-forward-outline'
-                    : 'construct-outline'
-              }
-              size={14}
-              color={isError ? colors.danger : colors.accent}
-            />
-            <Text
-              style={[styles.toolName, isError && { color: colors.danger }]}
-              numberOfLines={1}
-            >
-              {part.text}
-            </Text>
-            {receivedAt ? (
-              <Text style={styles.toolTime}>
-                {formatRelativeTime(receivedAt)}
-              </Text>
-            ) : null}
-          </View>
-          {part.detail ? (
-            <Text style={styles.toolDetail} selectable>
-              {part.detail}
-            </Text>
-          ) : null}
-        </View>
+      <View style={styles.toolGroupWrap}>
+        <ToolPart part={part} />
       </View>
     );
   }
@@ -214,6 +373,7 @@ const styles = StyleSheet.create({
   wrap: {
     maxWidth: '92%',
     alignSelf: 'stretch',
+    marginBottom: spacing.sm,
   },
   wrapUser: {
     alignSelf: 'flex-end',
@@ -222,6 +382,7 @@ const styles = StyleSheet.create({
   wrapAgent: {
     alignSelf: 'flex-start',
     maxWidth: '92%',
+    marginBottom: spacing.sm,
   },
   bubble: {
     borderRadius: radius.lg,
@@ -297,6 +458,7 @@ const styles = StyleSheet.create({
   statusWrap: {
     alignItems: 'center',
     marginVertical: 2,
+    marginBottom: spacing.sm,
   },
   statusPill: {
     flexDirection: 'row',
@@ -315,43 +477,130 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     flexShrink: 1,
   },
-  toolWrap: {
+  // --- Tool group (collapsible box) ---
+  toolGroupWrap: {
     alignSelf: 'flex-start',
-    maxWidth: '92%',
+    maxWidth: '96%',
+    width: '100%',
+    marginBottom: spacing.sm,
   },
-  toolCard: {
+  toolGroup: {
     backgroundColor: colors.bgElevated,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: radius.md,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm + 2,
-    gap: 4,
+    overflow: 'hidden',
   },
-  toolError: {
+  toolGroupError: {
     borderColor: 'rgba(251,113,133,0.44)',
     backgroundColor: colors.dangerSoft,
   },
-  toolHeader: {
+  toolGroupHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
   },
-  toolName: {
+  toolGroupHeaderPressed: {
+    backgroundColor: colors.surfaceHover,
+  },
+  toolGroupSummary: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    flexShrink: 0,
+  },
+  toolGroupErrorLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.danger,
+  },
+  toolGroupPreview: {
     flex: 1,
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.accent,
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
+    color: colors.textMuted,
+    textAlign: 'right',
+    marginLeft: spacing.sm,
   },
-  toolTime: {
+  toolGroupTime: {
     fontSize: 10,
     color: colors.textMuted,
+    marginLeft: 4,
   },
-  toolDetail: {
+  toolGroupBody: {
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+    padding: spacing.sm,
+    gap: spacing.xs,
+  },
+  // --- Individual tool line inside a group ---
+  toolPart: {
+    borderWidth: 1,
+    borderRadius: radius.sm,
+    overflow: 'hidden',
+  },
+  toolPartCall: {
+    borderColor: 'rgba(251, 191, 36, 0.35)',
+    backgroundColor: colors.warningSoft,
+  },
+  toolPartResult: {
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surface,
+  },
+  toolPartError: {
+    borderColor: 'rgba(251,113,133,0.44)',
+    backgroundColor: colors.dangerSoft,
+  },
+  toolPartHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+  },
+  toolPartChevronSpacer: {
+    width: 12,
+  },
+  toolPartBadge: {
+    borderRadius: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  toolPartBadgeCall: {
+    backgroundColor: 'rgba(251, 191, 36, 0.2)',
+  },
+  toolPartBadgeResult: {
+    backgroundColor: colors.bgElevated,
+  },
+  toolPartBadgeError: {
+    backgroundColor: 'rgba(251,113,133,0.2)',
+  },
+  toolPartBadgeText: {
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  toolPartName: {
+    flex: 1,
     fontSize: 12,
     fontFamily: 'SpaceMono',
+    color: colors.text,
+  },
+  toolPartDetailScroll: {
+    maxHeight: 200,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+  },
+  toolPartDetail: {
+    fontSize: 11,
+    fontFamily: 'SpaceMono',
     color: colors.textSecondary,
-    lineHeight: 17,
+    lineHeight: 16,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
   },
   thinkingCard: {
     backgroundColor: colors.bgElevated,

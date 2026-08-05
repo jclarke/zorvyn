@@ -21,7 +21,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { MessageBubble } from '@/components/MessageBubble';
+import { TranscriptRowItem } from '@/components/MessageBubble';
 import {
   ErrorBanner,
   LoadingState,
@@ -34,7 +34,7 @@ import {
   loadOlderMessagePage,
   MESSAGE_PAGE_SIZE,
 } from '@/lib/messages-paging';
-import { parseTranscript } from '@/lib/transcript';
+import { buildTranscriptRows, parseTranscript } from '@/lib/transcript';
 import type {
   Message,
   Session,
@@ -86,8 +86,9 @@ export default function SessionChatScreen() {
   const loadingOlderRef = useRef(false);
 
   // Newest-first for inverted FlatList (index 0 sits at the visual bottom).
+  // Tool/tool_result runs are merged into collapsible groups before reverse.
   const listData = React.useMemo(
-    () => [...parseTranscript(messages)].reverse(),
+    () => buildTranscriptRows(parseTranscript(messages)).reverse(),
     [messages],
   );
 
@@ -440,9 +441,9 @@ export default function SessionChatScreen() {
           // Inverted: newest messages start at the bottom without scrollToEnd hacks
           inverted
           data={listData}
-          keyExtractor={(item) => item.id}
+          keyExtractor={(item) => item.key}
           contentContainerStyle={styles.messages}
-          renderItem={({ item }) => <MessageBubble message={item} />}
+          renderItem={({ item }) => <TranscriptRowItem row={item} />}
           // With inverted data (newest first), older pages append to the end
           // of the array (visual top). Keep the bottom stable while loading.
           maintainVisibleContentPosition={

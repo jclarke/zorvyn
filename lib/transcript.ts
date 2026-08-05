@@ -932,6 +932,98 @@ export function parseTranscript(messages: Message[]): ParsedMessage[] {
     .filter((m) => m.visible && m.parts.length > 0);
 }
 
+/** Kinds that collapse into a single tool-traffic group in the chat UI. */
+export const TOOL_KINDS: TranscriptKind[] = ['tool', 'tool_result'];
+
+export function isToolKind(kind: TranscriptKind): boolean {
+  return kind === 'tool' || kind === 'tool_result';
+}
+
+/**
+ * Flattened display rows for the chat list.
+ * Consecutive tool/tool_result parts (even across API messages) merge into one
+ * collapsible group — matching Conductor / ez-rocket-ship behaviour.
+ */
+export type TranscriptRow =
+  | {
+      kind: 'part';
+      key: string;
+      part: TranscriptPart;
+      receivedAt: string;
+    }
+  | {
+      kind: 'tools';
+      key: string;
+      parts: TranscriptPart[];
+      receivedAt: string;
+    };
+
+export function countToolParts(messages: ParsedMessage[]): number {
+  return messages.reduce(
+    (total, m) => total + m.parts.filter((p) => isToolKind(p.kind)).length,
+    0,
+  );
+}
+
+/**
+ * Build display rows from parsed messages. Order matches API order
+ * (ascending sessionIndex). Pass showTools=false to drop tool traffic.
+ */
+export function buildTranscriptRows(
+  messages: ParsedMessage[],
+  showTools = true,
+): TranscriptRow[] {
+  const rows: TranscriptRow[] = [];
+  let pending: {
+    parts: TranscriptPart[];
+    receivedAt: string;
+    key: string;
+  } | null = null;
+
+  const flushTools = () => {
+    if (!pending) return;
+    rows.push({
+      kind: 'tools',
+      key: pending.key,
+      parts: pending.parts,
+      receivedAt: pending.receivedAt,
+    });
+    pending = null;
+  };
+
+  for (const message of messages) {
+    message.parts.forEach((part, index) => {
+      const key = `${message.id}-${index}`;
+
+      if (isToolKind(part.kind)) {
+        if (!showTools) return;
+        if (pending) {
+          pending.parts.push(part);
+          pending.receivedAt = message.receivedAt;
+        } else {
+          pending = {
+            parts: [part],
+            receivedAt: message.receivedAt,
+            key,
+          };
+        }
+        return;
+      }
+
+      flushTools();
+      rows.push({
+        kind: 'part',
+        key,
+        part,
+        receivedAt: message.receivedAt,
+      });
+    });
+  }
+
+  flushTools();
+  return rows;
+}
+
 /** Human label for a part kind */
 export function partLabel(kind: TranscriptKind): string {
   switch (kind) {

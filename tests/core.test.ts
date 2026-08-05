@@ -19,6 +19,11 @@ import {
   collectPaginated,
   mapWithConcurrency,
 } from '../lib/pagination';
+import {
+  buildTranscriptRows,
+  countToolParts,
+  type ParsedMessage,
+} from '../lib/transcript';
 import type { Message } from '../lib/types';
 
 test('Codex efforts follow the Conductor model constraints', () => {
@@ -100,6 +105,59 @@ test('message link extraction preserves owner and repository', () => {
     number: 9,
     label: 'PR #9',
   });
+});
+
+test('consecutive tool traffic collapses into one transcript row', () => {
+  const messages: ParsedMessage[] = [
+    {
+      id: 'm1',
+      receivedAt: '2026-01-01T00:00:00.000Z',
+      sessionIndex: 1,
+      type: 'agent',
+      visible: true,
+      parts: [
+        { kind: 'tool', text: 'Bash', detail: 'ls' },
+        { kind: 'tool', text: 'Edit', detail: 'foo.ts' },
+      ],
+    },
+    {
+      id: 'm2',
+      receivedAt: '2026-01-01T00:00:01.000Z',
+      sessionIndex: 2,
+      type: 'agent',
+      visible: true,
+      parts: [{ kind: 'tool_result', text: 'ok' }],
+    },
+    {
+      id: 'm3',
+      receivedAt: '2026-01-01T00:00:02.000Z',
+      sessionIndex: 3,
+      type: 'agent',
+      visible: true,
+      parts: [{ kind: 'assistant', text: 'Done', icon: 'sparkles' }],
+    },
+  ];
+
+  assert.equal(countToolParts(messages), 3);
+
+  const rows = buildTranscriptRows(messages);
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].kind, 'tools');
+  if (rows[0].kind === 'tools') {
+    assert.equal(rows[0].parts.length, 3);
+    assert.deepEqual(
+      rows[0].parts.map((p) => p.text),
+      ['Bash', 'Edit', 'ok'],
+    );
+  }
+  assert.equal(rows[1].kind, 'part');
+  if (rows[1].kind === 'part') {
+    assert.equal(rows[1].part.kind, 'assistant');
+  }
+
+  const hidden = buildTranscriptRows(messages, false);
+  assert.equal(hidden.length, 1);
+  assert.equal(hidden[0].kind, 'part');
 });
 
 test('markdown is bounded and parsed without automatic linkification', () => {
