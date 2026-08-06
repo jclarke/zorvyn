@@ -22,6 +22,11 @@ import {
 import {
   buildTranscriptRows,
   countToolParts,
+  formatQuestionAnswerMessage,
+  getPendingUserQuestion,
+  isAskUserQuestionTool,
+  parseAskUserQuestions,
+  parseTranscript,
   parseTranscriptMessage,
   type ParsedMessage,
 } from '../lib/transcript';
@@ -106,6 +111,109 @@ test('message link extraction preserves owner and repository', () => {
     number: 9,
     label: 'PR #9',
   });
+});
+
+test('AskUserQuestion tool_use becomes an interactive user_question part', () => {
+  const message: Message = {
+    id: 'm-ask',
+    sessionId: 's1',
+    sessionIndex: 5,
+    type: 'agent',
+    receivedAt: '2026-01-01T00:00:00.000Z',
+    content: {
+      type: 'agent',
+      rawPayload: {
+        type: 'assistant',
+        message: {
+          content: [
+            {
+              type: 'text',
+              text: 'Two blockers to surface before we can proceed:',
+            },
+            {
+              type: 'tool_use',
+              name: 'mcp__conductor__AskUserQuestion',
+              input: {
+                questions: [
+                  {
+                    question:
+                      'The Codex plugin is not installed. How would you like to proceed?',
+                    header: 'Codex',
+                    options: [
+                      {
+                        label: 'Install the Codex plugin first',
+                        description: 'Set up the plugin then re-run',
+                      },
+                      {
+                        label: 'Proceed as a single-model loop',
+                        description: 'Claude-only, not cross-model',
+                      },
+                      {
+                        label: 'Cancel',
+                        description: "I'll set up Codex myself",
+                      },
+                    ],
+                    multiSelect: false,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+
+  const parsed = parseTranscript([message]);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].parts.length, 2);
+  assert.equal(parsed[0].parts[0].kind, 'assistant');
+  const q = parsed[0].parts[1];
+  assert.equal(q.kind, 'user_question');
+  assert.equal(q.awaitingResponse, true);
+  assert.ok(q.questions);
+  assert.equal(q.questions!.length, 1);
+  assert.equal(q.questions![0].options.length, 3);
+  assert.match(q.questions![0].question, /Codex plugin/);
+
+  assert.equal(getPendingUserQuestion(parsed)?.kind, 'user_question');
+
+  // After a user reply, the question is no longer pending
+  const answered = parseTranscript([
+    message,
+    {
+      id: 'm-reply',
+      sessionId: 's1',
+      sessionIndex: 6,
+      type: 'userMessage',
+      receivedAt: '2026-01-01T00:00:01.000Z',
+      content: { type: 'userMessage', message: '2. Proceed as a single-model loop' },
+    },
+  ]);
+  assert.equal(getPendingUserQuestion(answered), null);
+  const priorQ = answered[0].parts.find((p) => p.kind === 'user_question');
+  assert.equal(priorQ?.awaitingResponse, false);
+});
+
+test('parseAskUserQuestions and answer formatting', () => {
+  const questions = parseAskUserQuestions({
+    questions: [
+      {
+        question: 'Pick a mode',
+        options: [
+          { label: 'Fast', description: 'Quick' },
+          { label: 'Careful', description: 'Slow' },
+        ],
+      },
+    ],
+  });
+  assert.equal(questions.length, 1);
+  assert.equal(
+    formatQuestionAnswerMessage(questions, { 0: ['Careful'] }),
+    '2. Careful',
+  );
+  assert.ok(isAskUserQuestionTool('AskUserQuestion'));
+  assert.ok(isAskUserQuestionTool('mcp__conductor__AskUserQuestion'));
 });
 
 test('tool_progress heartbeats are hidden instead of dumping raw JSON', () => {

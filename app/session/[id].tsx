@@ -34,7 +34,11 @@ import {
   loadOlderMessagePage,
   MESSAGE_PAGE_SIZE,
 } from '@/lib/messages-paging';
-import { buildTranscriptRows, parseTranscript } from '@/lib/transcript';
+import {
+  buildTranscriptRows,
+  getPendingUserQuestion,
+  parseTranscript,
+} from '@/lib/transcript';
 import type {
   Message,
   Session,
@@ -87,10 +91,19 @@ export default function SessionChatScreen() {
 
   // Newest-first for inverted FlatList (index 0 sits at the visual bottom).
   // Tool/tool_result runs are merged into collapsible groups before reverse.
-  const listData = React.useMemo(
-    () => buildTranscriptRows(parseTranscript(messages)).reverse(),
+  const parsedMessages = React.useMemo(
+    () => parseTranscript(messages),
     [messages],
   );
+  const listData = React.useMemo(
+    () => buildTranscriptRows(parsedMessages).reverse(),
+    [parsedMessages],
+  );
+  const pendingQuestion = React.useMemo(
+    () => getPendingUserQuestion(parsedMessages),
+    [parsedMessages],
+  );
+  const awaitingUserInput = !!pendingQuestion;
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -248,9 +261,9 @@ export default function SessionChatScreen() {
     };
   }, [poll]);
 
-  async function onSend() {
-    const text = draft.trim();
-    if (!text || sending || waking || !client) return;
+  async function sendUserMessage(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed || sending || waking || !client) return;
 
     setSending(true);
     setError(null);
@@ -276,7 +289,7 @@ export default function SessionChatScreen() {
         setWaking(true);
       }
 
-      await client.sendMessage(id, { message: text });
+      await client.sendMessage(id, { message: trimmed });
       setDraft('');
 
       if (life.wasAsleep || life.status.status !== 'ready') {
@@ -293,6 +306,14 @@ export default function SessionChatScreen() {
       setWaking(false);
       setSending(false);
     }
+  }
+
+  async function onSend() {
+    await sendUserMessage(draft);
+  }
+
+  async function onAnswerQuestion(message: string) {
+    await sendUserMessage(message);
   }
 
   async function onCancel() {
@@ -370,6 +391,7 @@ export default function SessionChatScreen() {
   const working = status?.status === 'working';
   const wsLifecycle: WorkspaceLifecycleStatus | undefined =
     workspaceStatus?.status;
+  // Agent stays "working" while blocked on AskUserQuestion — surface that.
   const statusHint = waking
     ? workspaceStatus?.lifecycleStep
       ? `Waking workspace… ${workspaceStatus.lifecycleStep}`
@@ -378,13 +400,15 @@ export default function SessionChatScreen() {
       ? 'Workspace sleeping — next message will wake it'
       : wsLifecycle === 'initializing' || wsLifecycle === 'updating'
         ? `Workspace ${wsLifecycle}${workspaceStatus?.lifecycleStep ? ` · ${workspaceStatus.lifecycleStep}` : ''}`
-        : working
-          ? 'Agent is working…'
-          : status?.status === 'error'
-            ? status.errorMessage || status.lastError || 'Agent error'
-            : seenWorking
-              ? 'Agent idle'
-              : status?.status || 'idle';
+        : working && awaitingUserInput
+          ? 'Waiting for your answer…'
+          : working
+            ? 'Agent is working…'
+            : status?.status === 'error'
+              ? status.errorMessage || status.lastError || 'Agent error'
+              : seenWorking
+                ? 'Agent idle'
+                : status?.status || 'idle';
 
   const statusDotKind = waking
     ? 'initializing'
@@ -392,7 +416,9 @@ export default function SessionChatScreen() {
       ? 'sleeping'
       : wsLifecycle === 'initializing' || wsLifecycle === 'updating'
         ? wsLifecycle
-        : status?.status;
+        : working && awaitingUserInput
+          ? 'working'
+          : status?.status;
 
   return (
     <Screen>
@@ -443,7 +469,19 @@ export default function SessionChatScreen() {
           data={listData}
           keyExtractor={(item) => item.key}
           contentContainerStyle={styles.messages}
-          renderItem={({ item }) => <TranscriptRowItem row={item} />}
+          renderItem={({ item }) => (
+            <TranscriptRowItem
+              row={item}
+              onAnswerQuestion={
+                item.kind === 'part' &&
+                item.part.kind === 'user_question' &&
+                item.part.awaitingResponse
+                  ? onAnswerQuestion
+                  : undefined
+              }
+              answering={sending}
+            />
+          )}
           // With inverted data (newest first), older pages append to the end
           // of the array (visual top). Keep the bottom stable while loading.
           maintainVisibleContentPosition={
@@ -471,8 +509,17 @@ export default function SessionChatScreen() {
           ListHeaderComponent={
             working ? (
               <View style={styles.typing}>
-                <ActivityIndicator size="small" color={colors.working} />
-                <Text style={styles.typingText}>Working…</Text>
+                <ActivityIndicator
+                  size="small"
+                  color={
+                    awaitingUserInput ? colors.warning : colors.working
+                  }
+                />
+                <Text style={styles.typingText}>
+                  {awaitingUserInput
+                    ? 'Waiting for your answer…'
+                    : 'Working…'}
+                </Text>
               </View>
             ) : null
           }
@@ -511,7 +558,11 @@ export default function SessionChatScreen() {
             style={styles.input}
             value={draft}
             onChangeText={setDraft}
-            placeholder="Tell the agent what to build…"
+            placeholder={
+              awaitingUserInput
+                ? 'Answer the question, or type a custom reply…'
+                : 'Tell the agent what to build…'
+            }
             placeholderTextColor={colors.textMuted}
             multiline
             maxLength={100000}

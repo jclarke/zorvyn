@@ -7,10 +7,25 @@ export type TranscriptKind =
   | 'thinking'
   | 'tool'
   | 'tool_result'
+  | 'user_question'
   | 'status'
   | 'error'
   | 'meta'
   | 'hidden';
+
+/** One multiple-choice option from AskUserQuestion */
+export type QuestionOption = {
+  label: string;
+  description?: string;
+};
+
+/** One clarifying question the agent is asking the user */
+export type UserQuestion = {
+  question: string;
+  header?: string;
+  options: QuestionOption[];
+  multiSelect?: boolean;
+};
 
 export type TranscriptPart = {
   kind: TranscriptKind;
@@ -24,6 +39,10 @@ export type TranscriptPart = {
   muted?: boolean;
   /** When true, content is collapsed by default (thinking) */
   collapsible?: boolean;
+  /** Structured AskUserQuestion payload (kind === 'user_question') */
+  questions?: UserQuestion[];
+  /** Whether the user still needs to answer (no later user reply) */
+  awaitingResponse?: boolean;
 };
 
 export type ParsedMessage = {
@@ -55,6 +74,152 @@ function stringifyDetail(value: unknown, max = 400): string | undefined {
   } catch {
     return String(value);
   }
+}
+
+/** True for AskUserQuestion and MCP aliases like mcp__conductor__AskUserQuestion. */
+export function isAskUserQuestionTool(name: string): boolean {
+  const n = (name || '').toLowerCase();
+  return (
+    n === 'askuserquestion' ||
+    n.endsWith('__askuserquestion') ||
+    n.includes('askuserquestion') ||
+    n.includes('ask_user_question')
+  );
+}
+
+function parseQuestionOptions(raw: unknown): QuestionOption[] {
+  if (!Array.isArray(raw)) return [];
+  const options: QuestionOption[] = [];
+  for (const item of raw) {
+    if (typeof item === 'string' && item.trim()) {
+      options.push({ label: item.trim() });
+      continue;
+    }
+    const rec = asRecord(item);
+    if (!rec) continue;
+    const label =
+      (typeof rec.label === 'string' && rec.label.trim()) ||
+      (typeof rec.text === 'string' && rec.text.trim()) ||
+      (typeof rec.title === 'string' && rec.title.trim()) ||
+      (typeof rec.value === 'string' && rec.value.trim()) ||
+      '';
+    if (!label) continue;
+    const description =
+      (typeof rec.description === 'string' && rec.description.trim()) ||
+      (typeof rec.detail === 'string' && rec.detail.trim()) ||
+      undefined;
+    options.push({ label, description: description || undefined });
+  }
+  return options;
+}
+
+/** Extract structured questions from an AskUserQuestion tool input. */
+export function parseAskUserQuestions(input: unknown): UserQuestion[] {
+  let rec = asRecord(input);
+  // Some streams stringify the tool input
+  if (!rec && typeof input === 'string') {
+    try {
+      rec = asRecord(JSON.parse(input));
+    } catch {
+      rec = null;
+    }
+  }
+  if (!rec) return [];
+
+  // questions may itself be a JSON string
+  let questionsField: unknown = rec.questions;
+  if (typeof questionsField === 'string') {
+    try {
+      questionsField = JSON.parse(questionsField);
+    } catch {
+      // leave as string
+    }
+  }
+
+  const questionsRaw = Array.isArray(questionsField)
+    ? questionsField
+    : Array.isArray(rec.question)
+      ? rec.question
+      : null;
+
+  if (questionsRaw) {
+    const out: UserQuestion[] = [];
+    for (const q of questionsRaw) {
+      if (typeof q === 'string' && q.trim()) {
+        out.push({ question: q.trim(), options: [] });
+        continue;
+      }
+      const qr = asRecord(q);
+      if (!qr) continue;
+      const question =
+        (typeof qr.question === 'string' && qr.question.trim()) ||
+        (typeof qr.prompt === 'string' && qr.prompt.trim()) ||
+        (typeof qr.text === 'string' && qr.text.trim()) ||
+        '';
+      if (!question) continue;
+      const header =
+        (typeof qr.header === 'string' && qr.header.trim()) ||
+        (typeof qr.title === 'string' && qr.title.trim()) ||
+        undefined;
+      const multiSelect =
+        qr.multiSelect === true ||
+        qr.multi_select === true ||
+        qr.allow_multiple === true;
+      out.push({
+        question,
+        header: header || undefined,
+        options: parseQuestionOptions(qr.options ?? qr.choices),
+        multiSelect,
+      });
+    }
+    return out;
+  }
+
+  // Single-question shapes
+  const question =
+    (typeof rec.question === 'string' && rec.question.trim()) ||
+    (typeof rec.prompt === 'string' && rec.prompt.trim()) ||
+    '';
+  if (!question) return [];
+  return [
+    {
+      question,
+      header:
+        (typeof rec.header === 'string' && rec.header.trim()) || undefined,
+      options: parseQuestionOptions(rec.options ?? rec.choices),
+      multiSelect:
+        rec.multiSelect === true ||
+        rec.multi_select === true ||
+        rec.allow_multiple === true,
+    },
+  ];
+}
+
+/**
+ * Format a user's selection as a chat message Conductor can feed back
+ * into the waiting AskUserQuestion tool.
+ */
+export function formatQuestionAnswerMessage(
+  questions: UserQuestion[],
+  answers: Record<number, string[]>,
+): string {
+  const lines: string[] = [];
+  questions.forEach((q, qi) => {
+    const selected = answers[qi] || [];
+    if (!selected.length) return;
+    if (questions.length > 1) {
+      lines.push(`${q.header || `Q${qi + 1}`}: ${q.question}`);
+    }
+    selected.forEach((label) => {
+      const optIndex = q.options.findIndex((o) => o.label === label);
+      if (optIndex >= 0) {
+        lines.push(`${optIndex + 1}. ${label}`);
+      } else {
+        lines.push(label);
+      }
+    });
+  });
+  return lines.join('\n').trim();
 }
 
 function summarizeToolInput(name: string, input: unknown): { text: string; detail?: string } {
@@ -107,6 +272,21 @@ function summarizeToolInput(name: string, input: unknown): { text: string; detai
   return { text: n, detail: detail === '{}' || detail === 'null' ? undefined : detail };
 }
 
+function partFromAskUserQuestion(name: string, input: unknown): TranscriptPart {
+  const questions = parseAskUserQuestions(input);
+  const preview =
+    questions[0]?.question ||
+    summarizeToolInput(name, input).detail ||
+    'The agent needs your input';
+  return {
+    kind: 'user_question',
+    text: preview,
+    questions: questions.length ? questions : undefined,
+    awaitingResponse: true,
+    icon: 'alert',
+  };
+}
+
 function partsFromContentBlocks(blocks: unknown[]): TranscriptPart[] {
   const parts: TranscriptPart[] = [];
 
@@ -137,6 +317,10 @@ function partsFromContentBlocks(blocks: unknown[]): TranscriptPart[] {
 
     if (type === 'tool_use' || type === 'server_tool_use') {
       const name = typeof b.name === 'string' ? b.name : 'Tool';
+      if (isAskUserQuestionTool(name)) {
+        parts.push(partFromAskUserQuestion(name, b.input));
+        continue;
+      }
       const summary = summarizeToolInput(name, b.input);
       parts.push({
         kind: 'tool',
@@ -406,7 +590,7 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
     return parts.length ? parts : [{ kind: 'hidden', text: '' }];
   }
 
-  // Conductor / MCP tools: GetWorkspaceDiff, etc.
+  // Conductor / MCP tools: GetWorkspaceDiff, AskUserQuestion, etc.
   if (itemType === 'mcpToolCall' || itemType === 'mcp_tool_call') {
     const server = typeof item.server === 'string' ? item.server : '';
     const tool =
@@ -416,7 +600,19 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
     const status = typeof item.status === 'string' ? item.status : '';
     const failed =
       status === 'failed' || status === 'error' || item.error != null;
-    const argsDetail = formatJsonish(item.arguments, 300);
+    const fullName = server ? `${server}__${tool}` : tool;
+    const args = item.arguments ?? item.input ?? item.params;
+
+    if (isAskUserQuestionTool(tool) || isAskUserQuestionTool(fullName)) {
+      const part = partFromAskUserQuestion(fullName, args);
+      // Completed MCP calls are no longer awaiting input
+      if (status === 'completed' || status === 'success' || item.result != null) {
+        part.awaitingResponse = false;
+      }
+      return [part];
+    }
+
+    const argsDetail = formatJsonish(args, 300);
     const label = server ? `${server} · ${tool}` : tool;
 
     const parts: TranscriptPart[] = [
@@ -935,9 +1131,62 @@ function isUserType(type: string): boolean {
 
 /** Filter + parse a list of API messages for the chat list. */
 export function parseTranscript(messages: Message[]): ParsedMessage[] {
-  return messages
+  const parsed = messages
     .map(parseTranscriptMessage)
     .filter((m) => m.visible && m.parts.length > 0);
+  return markQuestionAwaitingState(parsed);
+}
+
+/**
+ * A user_question is awaiting only if nothing after it shows the user answered
+ * (a later user message, or a tool_result / completion).
+ */
+function markQuestionAwaitingState(messages: ParsedMessage[]): ParsedMessage[] {
+  // Flatten chronological parts with pointers back to message/part
+  type Ref = { mi: number; pi: number; kind: TranscriptKind };
+  const flat: Ref[] = [];
+  messages.forEach((m, mi) => {
+    m.parts.forEach((p, pi) => {
+      flat.push({ mi, pi, kind: p.kind });
+    });
+  });
+
+  const answeredAfter = (fromIndex: number): boolean => {
+    for (let i = fromIndex + 1; i < flat.length; i++) {
+      const k = flat[i].kind;
+      // User reply or tool completion ends the wait
+      if (k === 'user' || k === 'tool_result') return true;
+      // A later question supersedes this one for UI purposes
+      if (k === 'user_question') return true;
+    }
+    return false;
+  };
+
+  return messages.map((m, mi) => ({
+    ...m,
+    parts: m.parts.map((p, pi) => {
+      if (p.kind !== 'user_question') return p;
+      const idx = flat.findIndex((r) => r.mi === mi && r.pi === pi);
+      const awaiting = idx >= 0 ? !answeredAfter(idx) : !!p.awaitingResponse;
+      return { ...p, awaitingResponse: awaiting };
+    }),
+  }));
+}
+
+/** Latest AskUserQuestion that still needs an answer, if any. */
+export function getPendingUserQuestion(
+  messages: ParsedMessage[],
+): TranscriptPart | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const parts = messages[i].parts;
+    for (let j = parts.length - 1; j >= 0; j--) {
+      const p = parts[j];
+      if (p.kind === 'user_question' && p.awaitingResponse) {
+        return p;
+      }
+    }
+  }
+  return null;
 }
 
 /** Kinds that collapse into a single tool-traffic group in the chat UI. */
@@ -1045,6 +1294,8 @@ export function partLabel(kind: TranscriptKind): string {
       return 'Tool';
     case 'tool_result':
       return 'Result';
+    case 'user_question':
+      return 'User input';
     case 'status':
       return 'Status';
     case 'error':
