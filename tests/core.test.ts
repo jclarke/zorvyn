@@ -22,6 +22,7 @@ import {
 import {
   buildTranscriptRows,
   countToolParts,
+  parseTranscriptMessage,
   type ParsedMessage,
 } from '../lib/transcript';
 import type { Message } from '../lib/types';
@@ -105,6 +106,41 @@ test('message link extraction preserves owner and repository', () => {
     number: 9,
     label: 'PR #9',
   });
+});
+
+test('tool_progress heartbeats are hidden instead of dumping raw JSON', () => {
+  const message: Message = {
+    id: 'm-progress',
+    sessionId: 's1',
+    sessionIndex: 12,
+    type: 'agent',
+    receivedAt: '2026-01-01T00:00:00.000Z',
+    content: {
+      type: 'agent',
+      rawPayload: {
+        type: 'tool_progress',
+        tool_use_id: 'toolu_01abc',
+        elapsed_time_seconds: 42,
+      },
+    },
+  };
+
+  const parsed = parseTranscriptMessage(message);
+  assert.equal(parsed.visible, false);
+  assert.equal(parsed.parts.length, 0);
+
+  // Variant type names used by some agent streams
+  for (const progressType of ['tool_use_progress', 'progress'] as const) {
+    const variant = parseTranscriptMessage({
+      ...message,
+      id: `m-${progressType}`,
+      content: {
+        type: 'agent',
+        rawPayload: { type: progressType, tool_use_id: 'x' },
+      },
+    });
+    assert.equal(variant.visible, false, `${progressType} should be hidden`);
+  }
 });
 
 test('consecutive tool traffic collapses into one transcript row', () => {

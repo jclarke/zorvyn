@@ -793,8 +793,16 @@ function parseAgentPayload(raw: unknown): TranscriptPart[] {
     return [{ kind: 'error', text: msg, icon: 'alert' }];
   }
 
-  // Stream deltas / unknown — hide empty noise
-  if (type === 'stream_event' || type === 'content_block_delta') {
+  // Stream deltas / high-frequency heartbeats — hide empty noise.
+  // tool_progress fires repeatedly while a tool runs (bash, MCP wait, etc.)
+  // and previously fell through to meta pills that dumped raw JSON into chat.
+  if (
+    type === 'stream_event' ||
+    type === 'content_block_delta' ||
+    type === 'tool_progress' ||
+    type === 'tool_use_progress' ||
+    type === 'progress'
+  ) {
     return [{ kind: 'hidden', text: '' }];
   }
 
