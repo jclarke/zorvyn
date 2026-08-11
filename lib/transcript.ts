@@ -287,6 +287,53 @@ function partFromAskUserQuestion(name: string, input: unknown): TranscriptPart {
   };
 }
 
+/**
+ * Pull human-readable reasoning text from the many shapes agents emit.
+ * Claude content blocks use `thinking`; some streams use `text` / `content`;
+ * Codex reasoning items use `summary` arrays; nested objects appear too.
+ */
+function extractThinkingText(value: unknown): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => extractThinkingText(item))
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+  const rec = asRecord(value);
+  if (!rec) return '';
+
+  // Prefer dedicated reasoning fields, then generic text carriers.
+  const candidates: unknown[] = [
+    rec.thinking,
+    rec.reasoning,
+    rec.summary,
+    rec.text,
+    rec.content,
+    rec.message,
+    rec.delta,
+  ];
+  for (const candidate of candidates) {
+    // Avoid treating the whole block as thinking just because it has a type
+    if (candidate === value) continue;
+    const text = extractThinkingText(candidate);
+    if (text) return text;
+  }
+  return '';
+}
+
+function thinkingPart(text: string): TranscriptPart {
+  return {
+    kind: 'thinking',
+    text,
+    muted: true,
+    collapsible: true,
+    icon: 'time',
+  };
+}
+
 function partsFromContentBlocks(blocks: unknown[]): TranscriptPart[] {
   const parts: TranscriptPart[] = [];
 
@@ -304,10 +351,21 @@ function partsFromContentBlocks(blocks: unknown[]): TranscriptPart[] {
       continue;
     }
 
-    if (type === 'thinking' && typeof b.thinking === 'string' && b.thinking.trim()) {
+    // Claude extended thinking (and variants: text/content fields, nested objects)
+    if (type === 'thinking' || type === 'reasoning') {
+      const text = extractThinkingText(b);
+      if (text) {
+        parts.push(thinkingPart(text));
+      }
+      // Empty / signature-only thinking blocks stay hidden
+      continue;
+    }
+
+    // Anthropic redacted thinking — no recoverable text
+    if (type === 'redacted_thinking' || type === 'redactedThinking') {
       parts.push({
         kind: 'thinking',
-        text: b.thinking.trim(),
+        text: 'Reasoning redacted',
         muted: true,
         collapsible: true,
         icon: 'time',
@@ -477,40 +535,9 @@ function parseCodexItem(item: Record<string, unknown>): TranscriptPart[] {
   }
 
   if (itemType === 'reasoning' || itemType === 'thinking') {
-    const summary = item.summary;
-    let text = '';
-    if (typeof summary === 'string') text = summary.trim();
-    else if (Array.isArray(summary)) {
-      text = summary
-        .map((s) => {
-          if (typeof s === 'string') return s;
-          const r = asRecord(s);
-          return (
-            (r &&
-              (typeof r.text === 'string'
-                ? r.text
-                : typeof r.summary === 'string'
-                  ? r.summary
-                  : '')) ||
-            ''
-          );
-        })
-        .filter(Boolean)
-        .join('\n')
-        .trim();
-    }
-    if (!text) text = textFromCodexContent(item.content);
-    if (!text && typeof item.text === 'string') text = item.text.trim();
+    const text = extractThinkingText(item);
     if (!text) return [{ kind: 'hidden', text: '' }];
-    return [
-      {
-        kind: 'thinking',
-        text,
-        muted: true,
-        collapsible: true,
-        icon: 'time',
-      },
-    ];
+    return [thinkingPart(text)];
   }
 
   if (
@@ -934,6 +961,26 @@ function parseAgentPayload(raw: unknown): TranscriptPart[] {
     ];
   }
 
+  // Standalone thinking / reasoning events (not nested under assistant.message).
+  // Without this, they fall through to meta and dump raw JSON into the chat.
+  if (type === 'thinking' || type === 'reasoning') {
+    const text = extractThinkingText(payload);
+    if (!text) return [{ kind: 'hidden', text: '' }];
+    return [thinkingPart(text)];
+  }
+
+  if (type === 'redacted_thinking' || type === 'redactedThinking') {
+    return [
+      {
+        kind: 'thinking',
+        text: 'Reasoning redacted',
+        muted: true,
+        collapsible: true,
+        icon: 'time',
+      },
+    ];
+  }
+
   if (type === 'assistant') {
     const message = asRecord(payload.message);
     const content = message?.content;
@@ -943,6 +990,11 @@ function parseAgentPayload(raw: unknown): TranscriptPart[] {
     }
     if (message && typeof message.content === 'string') {
       return [{ kind: 'assistant', text: message.content, icon: 'sparkles' }];
+    }
+    // Some streams put thinking blocks beside message rather than inside content
+    if (Array.isArray(payload.content)) {
+      const parts = partsFromContentBlocks(payload.content);
+      if (parts.length) return parts;
     }
     return [{ kind: 'hidden', text: '' }];
   }
@@ -1006,12 +1058,30 @@ function parseAgentPayload(raw: unknown): TranscriptPart[] {
     return [{ kind: 'assistant', text: payload.message.trim(), icon: 'sparkles' }];
   }
 
+  // Last-chance: payload looks like a thinking block without a recognised type path
+  if (
+    typeof payload.thinking === 'string' ||
+    typeof payload.reasoning === 'string' ||
+    payload.summary != null
+  ) {
+    const text = extractThinkingText(payload);
+    if (text) return [thinkingPart(text)];
+  }
+
   if (type) {
+    // Never dump raw JSON for thinking-like labels; prefer hide or short label.
+    const label = type.replace(/_/g, ' ');
+    if (/think|reason/i.test(label)) {
+      const text = extractThinkingText(payload);
+      if (text) return [thinkingPart(text)];
+      return [{ kind: 'hidden', text: '' }];
+    }
     return [
       {
         kind: 'meta',
-        text: type.replace(/_/g, ' '),
-        detail: stringifyDetail(payload, 200),
+        text: label,
+        // Keep detail short — full JSON dumps are unreadable on mobile
+        detail: undefined,
         muted: true,
       },
     ];

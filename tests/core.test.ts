@@ -216,6 +216,94 @@ test('parseAskUserQuestions and answer formatting', () => {
   assert.ok(isAskUserQuestionTool('mcp__conductor__AskUserQuestion'));
 });
 
+test('thinking events render as thinking cards, not raw JSON pills', () => {
+  const base = {
+    sessionId: 's1',
+    sessionIndex: 3,
+    type: 'agent',
+    receivedAt: '2026-01-01T00:00:00.000Z',
+  } as const;
+
+  // Standalone thinking payload (common Claude stream shape)
+  const standalone = parseTranscriptMessage({
+    ...base,
+    id: 'm-think-standalone',
+    content: {
+      type: 'agent',
+      rawPayload: {
+        type: 'thinking',
+        thinking:
+          'PostgreSQL is running. Now I will examine the enrollment path.',
+      },
+    },
+  });
+  assert.equal(standalone.visible, true);
+  assert.equal(standalone.parts.length, 1);
+  assert.equal(standalone.parts[0].kind, 'thinking');
+  assert.match(standalone.parts[0].text, /PostgreSQL is running/);
+  assert.equal(standalone.parts[0].collapsible, true);
+  // Must not fall through to meta with JSON detail
+  assert.equal(standalone.parts[0].detail, undefined);
+
+  // Content block variants: text / content fields instead of thinking
+  for (const [field, value] of [
+    ['text', 'via text field'],
+    ['content', 'via content field'],
+  ] as const) {
+    const parsed = parseTranscriptMessage({
+      ...base,
+      id: `m-think-${field}`,
+      content: {
+        type: 'agent',
+        rawPayload: {
+          type: 'assistant',
+          message: {
+            content: [{ type: 'thinking', [field]: value }],
+          },
+        },
+      },
+    });
+    assert.equal(parsed.parts[0]?.kind, 'thinking', field);
+    assert.equal(parsed.parts[0]?.text, value, field);
+  }
+
+  // Nested thinking object
+  const nested = parseTranscriptMessage({
+    ...base,
+    id: 'm-think-nested',
+    content: {
+      type: 'agent',
+      rawPayload: {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'thinking', thinking: { text: 'nested reason' } }],
+        },
+      },
+    },
+  });
+  assert.equal(nested.parts[0]?.kind, 'thinking');
+  assert.equal(nested.parts[0]?.text, 'nested reason');
+
+  // Redacted thinking — never dump ciphertext/JSON
+  const redacted = parseTranscriptMessage({
+    ...base,
+    id: 'm-think-redacted',
+    content: {
+      type: 'agent',
+      rawPayload: {
+        type: 'assistant',
+        message: {
+          content: [{ type: 'redacted_thinking', data: 'cipher-blob' }],
+        },
+      },
+    },
+  });
+  assert.equal(redacted.parts[0]?.kind, 'thinking');
+  assert.match(redacted.parts[0]?.text || '', /redacted/i);
+  assert.ok(!redacted.parts[0]?.text?.includes('cipher-blob'));
+  assert.ok(!redacted.parts[0]?.detail?.includes('cipher-blob'));
+});
+
 test('tool_progress heartbeats are hidden instead of dumping raw JSON', () => {
   const message: Message = {
     id: 'm-progress',
