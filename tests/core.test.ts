@@ -7,7 +7,16 @@ import {
   extractLinkedResources,
 } from '../lib/changes';
 import { linkedPullNumbersForRepo } from '../lib/github-refs';
-import { effortsForAgentModel } from '../lib/models';
+import {
+  effortsForAgentModel,
+  MODELS_BY_AGENT,
+  supportsFastMode,
+} from '../lib/models';
+import {
+  isArchivedWorkspaceStatus,
+  isDeletedWorkspaceStatus,
+  isTerminalWorkspaceStatus,
+} from '../lib/workspace-lifecycle';
 import {
   boundMarkdownInput,
   MAX_MARKDOWN_CHARS,
@@ -31,6 +40,21 @@ import {
   type ParsedMessage,
 } from '../lib/transcript';
 import type { Message } from '../lib/types';
+
+test('Cursor picker includes Grok 4.6 with fast mode', () => {
+  assert.ok(MODELS_BY_AGENT.cursor.includes('grok-4.6'));
+  assert.equal(supportsFastMode('grok-4.6'), true);
+  assert.equal(supportsFastMode('grok-4.5'), true);
+});
+
+test('archived workspaces are restorable; deleted ones are terminal', () => {
+  assert.equal(isArchivedWorkspaceStatus('archived'), true);
+  assert.equal(isArchivedWorkspaceStatus('ready'), false);
+  assert.equal(isDeletedWorkspaceStatus('deleted'), true);
+  assert.equal(isTerminalWorkspaceStatus('archived'), true);
+  assert.equal(isTerminalWorkspaceStatus('deleted'), true);
+  assert.equal(isTerminalWorkspaceStatus('sleeping'), false);
+});
 
 test('Codex efforts follow the Conductor model constraints', () => {
   assert.deepEqual(effortsForAgentModel('codex', 'gpt-5.5'), [

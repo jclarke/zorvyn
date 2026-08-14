@@ -22,6 +22,7 @@ import {
   type WorkspaceCreateResponse,
   type WorkspaceStatus,
   type WorkspaceSummary,
+  type WorkspaceUnarchiveResponse,
 } from './types';
 
 export const API_BASE = 'https://api.conductor.build';
@@ -168,6 +169,13 @@ export class ConductorClient {
     return this.request<WorkspaceArchiveResponse>(
       'POST',
       `/v0/workspaces/${encodeURIComponent(workspaceId)}/archive`,
+    );
+  }
+
+  unarchiveWorkspace(workspaceId: string) {
+    return this.request<WorkspaceUnarchiveResponse>(
+      'POST',
+      `/v0/workspaces/${encodeURIComponent(workspaceId)}/unarchive`,
     );
   }
 

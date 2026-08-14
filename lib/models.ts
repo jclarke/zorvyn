@@ -33,7 +33,7 @@ export const MODELS_BY_AGENT: Record<Agent, Model[]> = {
     'gpt-5.3-codex',
     'gpt-5.2-codex',
   ],
-  cursor: ['auto', 'composer-2.5', 'grok-4.5'],
+  cursor: ['auto', 'composer-2.5', 'grok-4.6', 'grok-4.5'],
   acp: [],
 };
 
@@ -98,6 +98,7 @@ export const FAST_MODE_MODELS: Model[] = [
   // Cursor
   'auto',
   'composer-2.5',
+  'grok-4.6',
   'grok-4.5',
 ];
 

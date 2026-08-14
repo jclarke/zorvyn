@@ -27,7 +27,7 @@ export type CodexModel =
   | 'gpt-5.3-codex'
   | 'gpt-5.2-codex';
 
-export type CursorModel = 'auto' | 'composer-2.5' | 'grok-4.5';
+export type CursorModel = 'auto' | 'composer-2.5' | 'grok-4.6' | 'grok-4.5';
 
 export type Model = ClaudeModel | CodexModel | CursorModel | string;
 
@@ -111,6 +111,11 @@ export interface WorkspaceStatus {
 export interface WorkspaceArchiveResponse {
   workspaceId: string;
   status: 'archived';
+}
+
+export interface WorkspaceUnarchiveResponse {
+  workspaceId: string;
+  status: 'ready';
 }
 
 export interface CreateWorkspaceBody {

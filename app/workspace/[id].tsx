@@ -24,6 +24,7 @@ import { confirmAction, showMessage } from '@/lib/dialogs';
 import { collectPaginated } from '@/lib/pagination';
 import type { Session, WorkspaceStatus, WorkspaceSummary } from '@/lib/types';
 import { colors, spacing } from '@/lib/theme';
+import { restoreWorkspace } from '@/lib/workspace-lifecycle';
 
 export default function WorkspaceDetailScreen() {
   const { id, name } = useLocalSearchParams<{ id: string; name?: string }>();
@@ -107,7 +108,7 @@ export default function WorkspaceDetailScreen() {
     const confirmed = await confirmAction({
       title: 'Archive workspace',
       message:
-        'Stop the sandbox and hide this workspace? It can be restored later from desktop.',
+        'Stop the sandbox and hide this workspace? You can restore it here later.',
       confirmLabel: 'Archive',
       destructive: true,
     });
@@ -126,6 +127,32 @@ export default function WorkspaceDetailScreen() {
       setActionBusy(false);
     }
   }
+
+  async function onRestore() {
+    if (!client) return;
+    const confirmed = await confirmAction({
+      title: 'Restore workspace',
+      message: 'Start this workspace sandbox again?',
+      confirmLabel: 'Restore',
+    });
+    if (!confirmed) return;
+
+    setActionBusy(true);
+    try {
+      const next = await restoreWorkspace(client, id, { onStatus: setStatus });
+      setStatus(next);
+      await load(true);
+    } catch (e) {
+      showMessage(
+        'Restore failed',
+        e instanceof Error ? e.message : 'Error',
+      );
+    } finally {
+      setActionBusy(false);
+    }
+  }
+
+  const archived = status?.status === 'archived';
 
   if (!client || (loading && !workspace)) {
     return (
@@ -202,6 +229,7 @@ export default function WorkspaceDetailScreen() {
                     params: { workspaceId: id },
                   })
                 }
+                disabled={archived}
                 style={{ flex: 1 }}
               />
               <Button
@@ -229,14 +257,25 @@ export default function WorkspaceDetailScreen() {
                 onPress={() => setRenaming(true)}
                 style={{ flex: 1 }}
               />
-              <Button
-                title="Archive"
-                variant="danger"
-                icon="archive-outline"
-                onPress={() => void onArchive()}
-                disabled={actionBusy}
-                style={{ flex: 1 }}
-              />
+              {archived ? (
+                <Button
+                  title="Restore"
+                  icon="refresh-outline"
+                  onPress={() => void onRestore()}
+                  loading={actionBusy}
+                  disabled={actionBusy}
+                  style={{ flex: 1 }}
+                />
+              ) : (
+                <Button
+                  title="Archive"
+                  variant="danger"
+                  icon="archive-outline"
+                  onPress={() => void onArchive()}
+                  disabled={actionBusy}
+                  style={{ flex: 1 }}
+                />
+              )}
             </View>
 
             <SectionHeader title="Sessions" />
@@ -248,16 +287,25 @@ export default function WorkspaceDetailScreen() {
               title="No sessions"
               description="Add an agent chat to this workspace."
               action={
-                <Button
-                  title="New session"
-                  style={{ marginTop: spacing.lg }}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/session/create',
-                      params: { workspaceId: id },
-                    })
-                  }
-                />
+                archived ? (
+                  <Button
+                    title="Restore workspace"
+                    style={{ marginTop: spacing.lg }}
+                    onPress={() => void onRestore()}
+                    loading={actionBusy}
+                  />
+                ) : (
+                  <Button
+                    title="New session"
+                    style={{ marginTop: spacing.lg }}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/session/create',
+                        params: { workspaceId: id },
+                      })
+                    }
+                  />
+                )
               }
             />
           ) : null

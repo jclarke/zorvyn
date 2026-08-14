@@ -49,6 +49,7 @@ import type {
 import { colors, radius, spacing } from '@/lib/theme';
 import {
   getWorkspaceLifecycle,
+  restoreWorkspace,
   waitForWorkspaceReady,
 } from '@/lib/workspace-lifecycle';
 
@@ -283,6 +284,14 @@ export default function SessionChatScreen() {
       const life = await getWorkspaceLifecycle(client, workspaceId);
       setWorkspaceStatus(life.status);
 
+      if (life.needsRestore) {
+        setWaking(true);
+        const restored = await restoreWorkspace(client, workspaceId, {
+          onStatus: setWorkspaceStatus,
+        });
+        setWorkspaceStatus(restored);
+      }
+
       // No dedicated wake API: POST message queues + wakes a sleeping sandbox.
       // If asleep/initializing, surface waking UI and wait until ready after send.
       if (life.wasAsleep) {
@@ -292,7 +301,7 @@ export default function SessionChatScreen() {
       await client.sendMessage(id, { message: trimmed });
       setDraft('');
 
-      if (life.wasAsleep || life.status.status !== 'ready') {
+      if (life.wasAsleep || life.needsRestore || life.status.status !== 'ready') {
         await waitForWorkspaceReady(client, workspaceId, {
           onStatus: setWorkspaceStatus,
         });
@@ -365,6 +374,24 @@ export default function SessionChatScreen() {
     setArchiveConfirmOpen(true);
   }
 
+  async function onRestoreWorkspace() {
+    const workspaceId =
+      status?.workspaceId || workspaceStatus?.workspaceId;
+    if (!client || !workspaceId) return;
+    setWaking(true);
+    setError(null);
+    try {
+      const next = await restoreWorkspace(client, workspaceId, {
+        onStatus: setWorkspaceStatus,
+      });
+      setWorkspaceStatus(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Restore failed');
+    } finally {
+      setWaking(false);
+    }
+  }
+
   async function confirmArchive() {
     if (!client) return;
     setArchiving(true);
@@ -391,12 +418,16 @@ export default function SessionChatScreen() {
   const working = status?.status === 'working';
   const wsLifecycle: WorkspaceLifecycleStatus | undefined =
     workspaceStatus?.status;
+  const archived = wsLifecycle === 'archived';
+  const wakingLabel = archived ? 'Restoring workspace' : 'Waking workspace';
   // Agent stays "working" while blocked on AskUserQuestion — surface that.
   const statusHint = waking
     ? workspaceStatus?.lifecycleStep
-      ? `Waking workspace… ${workspaceStatus.lifecycleStep}`
-      : 'Waking workspace…'
-    : wsLifecycle === 'sleeping'
+      ? `${wakingLabel}… ${workspaceStatus.lifecycleStep}`
+      : `${wakingLabel}…`
+    : archived
+      ? 'Workspace archived — restore to continue'
+      : wsLifecycle === 'sleeping'
       ? 'Workspace sleeping — next message will wake it'
       : wsLifecycle === 'initializing' || wsLifecycle === 'updating'
         ? `Workspace ${wsLifecycle}${workspaceStatus?.lifecycleStep ? ` · ${workspaceStatus.lifecycleStep}` : ''}`
@@ -412,7 +443,9 @@ export default function SessionChatScreen() {
 
   const statusDotKind = waking
     ? 'initializing'
-    : wsLifecycle === 'sleeping'
+    : archived
+      ? 'archived'
+      : wsLifecycle === 'sleeping'
       ? 'sleeping'
       : wsLifecycle === 'initializing' || wsLifecycle === 'updating'
         ? wsLifecycle
@@ -431,6 +464,17 @@ export default function SessionChatScreen() {
           <StatusDot status={statusDotKind} label={statusHint} />
           {waking ? (
             <ActivityIndicator size="small" color={colors.accent} />
+          ) : null}
+          {archived && !waking ? (
+            <Pressable
+              onPress={() => void onRestoreWorkspace()}
+              style={styles.restoreBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Restore workspace"
+            >
+              <Ionicons name="refresh-outline" size={18} color={colors.accent} />
+              <Text style={styles.restoreText}>Restore</Text>
+            </Pressable>
           ) : null}
           {working && !waking ? (
             <Pressable
@@ -559,7 +603,9 @@ export default function SessionChatScreen() {
             value={draft}
             onChangeText={setDraft}
             placeholder={
-              awaitingUserInput
+              archived
+                ? 'Restore the workspace, or send to restore and continue…'
+                : awaitingUserInput
                 ? 'Answer the question, or type a custom reply…'
                 : 'Tell the agent what to build…'
             }
@@ -780,6 +826,16 @@ const styles = StyleSheet.create({
   },
   stopText: {
     color: colors.danger,
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  restoreBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  restoreText: {
+    color: colors.accent,
     fontWeight: '600',
     fontSize: 13,
   },
